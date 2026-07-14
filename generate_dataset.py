@@ -86,18 +86,15 @@ def sample_all_params(n, rng):
     else:
         raise RuntimeError("saturation rejection did not converge")
 
-    # --- fin 正準順序（違反ペアは fin 2列の (θ,d) を再抽選） ---
-    for it in range(300):
-        bad = theta[:, FIN1] + FIN_MARGIN > theta[:, FIN2]
-        if not bad.any():
-            break
-        nb = int(bad.sum())
-        for f in (FIN1, FIN2):
-            cap = 1.0 - np.abs(depth[bad, f])            # 飽和回避を保ったまま再抽選
-            theta[bad, f] = (rng.random(nb).astype(np.float32) * cap)
-    else:
-        raise RuntimeError("fin ordering rejection did not converge")
-
+# --- fin 正準順序（構成的に保証: 棄却なし） ---
+    cap1 = 1.0 - np.abs(depth[:, FIN1])          # 飽和回避の上限
+    cap2 = 1.0 - np.abs(depth[:, FIN2])
+    hi1 = np.minimum(cap1, cap2 - FIN_MARGIN)    # fin1 が取れる上限
+    hi1 = np.maximum(hi1, 0.0)
+    theta[:, FIN1] = rng.random(n).astype(np.float32) * hi1
+    lo2 = theta[:, FIN1] + FIN_MARGIN            # fin2 の下限
+    theta[:, FIN2] = (lo2 + rng.random(n).astype(np.float32)
+                      * np.maximum(cap2 - lo2, 0.0)).astype(np.float32)
     # --- ソースタイプ（v7）: Bern(1/2)。D4 必須 level のソースは ENV に固定 ---
     styp = (rng.random((n, K)) < 0.5).astype(np.float32)      # 1=ENV, 0=LFO
     k_lvl = z[np.arange(n), lvl].astype(int)
