@@ -33,7 +33,7 @@ K, M = ds.K_ENVS, ds.M_DEST
 CORE8 = [0, 1, 2, 3, 4, 7, 8, 10]
 CLUSTER = [10, 11, 15, 16]          # thresh, ratio, drive_d, mix_d（thresh は二重役割）
 WEAK = [5, 6, 9, 12, 13, 14]
-LAM = dict(spec=1.0, param=0.2, assign=1.0, sparse=0.03)
+LAM = dict(spec=1.0, param=0.2, assign=2.0, sparse=0.001)   # sparse 0.03→0.003, assign 1→2
 
 
 def parse_args():
