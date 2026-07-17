@@ -33,7 +33,7 @@ K, M = ds.K_ENVS, ds.M_DEST
 CORE8 = [0, 1, 2, 3, 4, 7, 8, 10]
 CLUSTER = [10, 11, 15, 16]          # thresh, ratio, drive_d, mix_d（thresh は二重役割）
 WEAK = [5, 6, 9, 12, 13, 14]
-LAM = dict(spec=1.0, param=0.2, assign=2.0, sparse=0.001)   # sparse 0.03→0.003, assign 1→2
+LAM = dict(spec=1.0, param=0.2, assign=1.0, sparse=0.03)
 
 
 def parse_args():
@@ -65,6 +65,18 @@ class Data:
         self.P = dict(np.load(os.path.join(root, "params.npz")))
         self.scale = self.man["int16_scale"]
         self.splits = {k: np.arange(v[0], v[1]) for k, v in self.man["splits"].items()}
+        # --- v8.2: 正準ソース順（学習教師の安定化）。ENV 先頭 attack 昇順 → LFO rate 昇順 ---
+        styp, sp = self.P["src_type"], self.P["src_params"]
+        key = np.where(styp == 1.0, sp[..., 0], 100.0 + sp[..., 0])
+        perm = np.argsort(key, axis=1, kind="stable")             # [n,K]
+        ar = np.arange(len(key))[:, None]
+        for k_ in ("src_params", "src_type", "R"):
+            self.P[k_] = self.P[k_][ar, perm]
+        inv = np.argsort(perm, axis=1).astype(np.int64)           # 旧→新
+        z = self.P["z"].astype(np.int64)
+        self.P["z"] = np.where(
+            z >= 0, np.take_along_axis(inv, np.maximum(z, 0), axis=1), -1
+        ).astype(np.int8)
 
     def batch(self, idx):
         x = tf.constant(self.wav[idx].astype(np.float32) / self.scale)
@@ -184,7 +196,7 @@ def main():
     def train_step(x, batch, temp):
         with tf.GradientTape() as tape:
             pred = model(x, batch["f0"], temp=temp, hard=True)
-            total, parts, _ = E.losses(pred, batch, x, SR, T_OFF, NH, LAM)
+            total, parts, _ = E.losses(pred, batch, x, SR, T_OFF, NH, LAM, matching=False)
         grads = tape.gradient(total, model.trainable_variables)
         grads, _ = tf.clip_by_global_norm(grads, args.clip)
         opt.apply_gradients(zip(grads, model.trainable_variables))

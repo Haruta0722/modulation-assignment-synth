@@ -131,10 +131,14 @@ def gather_rows(t, mapping):
 SLOT_SCALE_ENV = tf.constant([1.0, 1.0, 1.0, 1.0, R_MAX])            # a,h,d[s], s, r
 
 
-def losses(pred, batch, x_true, sr, t_off, n_harm, lam):
+def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     f0, true_R = batch["f0"], batch["R"]
     true_type = batch["src_type"]                                     # 1=ENV
-    mapping = match_perm(pred, true_R, true_type)
+    if matching:
+        mapping = match_perm(pred, true_R, true_type)
+    else:                                             # v8.2: 正準順序データでは恒等
+        B = tf.shape(true_R)[0]
+        mapping = tf.tile(tf.range(K, dtype=tf.int32)[None, :], [B, 1])
 
     src_p = gather_rows(pred["src_params"], mapping)                  # [B,K,5]
     type_lg = gather_rows(pred["type_logits"], mapping)
