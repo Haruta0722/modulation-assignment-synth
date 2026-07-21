@@ -52,6 +52,10 @@ def parse_args():
     ap.add_argument("--eval_only", action="store_true")
     ap.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
     ap.add_argument("--arch", type=str, default="v2", choices=["v1","v2"])
+    ap.add_argument("--spec_warm0", type=int, default=5000,
+                    help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
+    ap.add_argument("--spec_warmlen", type=int, default=5000,
+                    help="warm0 以降、この長さで λ_spec を 0→設定値へ線形に上げる")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -68,7 +72,11 @@ class Data:
         self.splits = {k: np.arange(v[0], v[1]) for k, v in self.man["splits"].items()}
         # --- v8.2: 正準ソース順（学習教師の安定化）。ENV 先頭 attack 昇順 → LFO rate 昇順 ---
         styp, sp = self.P["src_type"], self.P["src_params"]
-        key = np.where(styp == 1.0, sp[..., 0], 100.0 + sp[..., 0])
+        z0 = self.P["z"].astype(np.int64)
+        usedm = np.stack([(z0 == k).any(axis=1) for k in range(styp.shape[1])], 1)
+        # 使用中(=音に現れる)ソースを先頭へ。未使用は末尾（番号が音に依存しなくなる）
+        key = (np.where(usedm, 0.0, 1e4)
+               + np.where(styp == 1.0, sp[..., 0], 100.0 + sp[..., 0]))
         perm = np.argsort(key, axis=1, kind="stable")             # [n,K]
         ar = np.arange(len(key))[:, None]
         for k_ in ("src_params", "src_type", "R"):
@@ -193,11 +201,19 @@ def main():
         frac = min(step / max(args.steps, 1), 1.0)
         return float(args.temp_hi * (args.temp_lo / args.temp_hi) ** frac)
 
+    def spec_lam_at(step):
+        """v8.3: spec は初期にゲート勾配を CE の 7 倍で圧倒するため段階導入"""
+        if step < args.spec_warm0:
+            return 0.0
+        return LAM["spec"] * min((step - args.spec_warm0) / max(args.spec_warmlen, 1), 1.0)
+
     @tf.function
-    def train_step(x, batch, temp):
+    def train_step(x, batch, temp, spec_lam):
+        lam_now = dict(LAM); lam_now["spec"] = spec_lam
         with tf.GradientTape() as tape:
             pred = model(x, batch["f0"], temp=temp, hard=True)
-            total, parts, _ = E.losses(pred, batch, x, SR, T_OFF, NH, LAM, matching=False)
+            total, parts, _ = E.losses(pred, batch, x, SR, T_OFF, NH, lam_now,
+                                       matching=False)
         grads = tape.gradient(total, model.trainable_variables)
         grads, _ = tf.clip_by_global_norm(grads, args.clip)
         opt.apply_gradients(zip(grads, model.trainable_variables))
@@ -244,13 +260,15 @@ def main():
         idx = rng.choice(train_idx, args.batch, replace=False)
         x, batch = data.batch(idx)
         temp = temp_at(step)
-        total, parts = train_step(x, batch, tf.constant(temp, tf.float32))
+        sl = spec_lam_at(step)
+        total, parts = train_step(x, batch, tf.constant(temp, tf.float32),
+                                  tf.constant(sl, tf.float32))
         step_var.assign_add(1)
 
         if step % 50 == 0:
             rate = (int(step_var) - last) / max(time.time() - t0, 1e-9)
             t0, last = time.time(), int(step_var)
-            print(f"step {step:6d} T={temp:.2f} total={float(total):8.3f} "
+            print(f"step {step:6d} T={temp:.2f} Ls={sl:.2f} total={float(total):8.3f} "
                   + " ".join(f"{k}={float(v):.3f}" for k, v in parts.items())
                   + f"  ({rate:.2f} it/s)", flush=True)
 

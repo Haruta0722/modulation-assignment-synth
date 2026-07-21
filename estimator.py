@@ -149,6 +149,7 @@ SLOT_SCALE_ENV = tf.constant([1.0, 1.0, 1.0, 1.0, R_MAX])            # a,h,d[s],
 
 
 def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
+    # v8.3: used[B,K]=そのソースがどこかに配線されているか（聞こえるか）
     f0, true_R = batch["f0"], batch["R"]
     true_type = batch["src_type"]                                     # 1=ENV
     if matching:
@@ -166,6 +167,12 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     l_static = tf.reduce_mean(tf.reduce_sum((pred["theta_osc"] - batch["theta_osc"]) ** 2, -1)
                               + (pred["gmk"] - batch["gmk"]) ** 2)
     l_R = tf.reduce_mean(tf.reduce_sum((R_hat - true_R) ** 2, [1, 2]))
+    z_all = tf.cast(batch["z"], tf.int32)                             # [B,M]
+    used = tf.reduce_any(tf.equal(z_all[:, :, None],
+                                  tf.range(K, dtype=tf.int32)[None, None, :]),
+                         axis=1)                                      # [B,K]
+    uf = tf.cast(used, tf.float32)
+    nu = tf.maximum(tf.reduce_sum(uf), 1.0)
     is_env = true_type                                                # [B,K]
     d_env = tf.reduce_sum(((src_p - batch["src_params"]) / SLOT_SCALE_ENV) ** 2, -1)
     dphi = tf.abs(src_p[..., 1] - batch["src_params"][..., 1])
@@ -173,7 +180,7 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     lr_n = (tf.math.log(tf.maximum(src_p[..., 0], 1e-3) / 0.1)
             - tf.math.log(tf.maximum(batch["src_params"][..., 0], 1e-3) / 0.1)) / np.log(100.0)
     d_lfo = lr_n ** 2 + circ ** 2 + (src_p[..., 2] - batch["src_params"][..., 2]) ** 2
-    l_src = tf.reduce_mean(tf.reduce_sum(is_env * d_env + (1 - is_env) * d_lfo, -1))
+    l_src = tf.reduce_sum(uf * (is_env * d_env + (1 - is_env) * d_lfo)) / nu
     l_param = l_stat + l_static + l_R + l_src
 
     # --- ゲート/型 CE（π* でクラス添字を揃える） ---
@@ -184,14 +191,21 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     l_gate = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=z_re, logits=gate_lg))
     t_lab = tf.cast(1.0 - true_type, tf.int32)                        # ENV→0, LFO→1
-    l_type = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=t_lab, logits=type_lg))
+    ce_t = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=t_lab, logits=type_lg)                                 # [B,K]
+    l_type = tf.reduce_sum(uf * ce_t) / nu                            # 未使用ソースは除外
 
     # --- 疎性（soft 確率で） ---
     p_assign = 1.0 - tf.nn.softmax(gate_lg, -1)[..., K]
     l_sparse = tf.reduce_mean(tf.reduce_sum(p_assign, -1))
 
     # --- スペクトル（再合成、ST one-hot で厳密分岐） ---
+    if lam["spec"] <= 0.0:                       # 診断用: 再合成をスキップ
+        l_spec = tf.constant(0.0)
+        total = (lam["param"] * l_param + lam["assign"] * (l_gate + l_type)
+                 + lam["sparse"] * l_sparse)
+        return total, dict(spec=l_spec, param=l_param, gate=l_gate,
+                           type=l_type, sparse=l_sparse), mapping
     x_hat = synth_fast(pred["theta_stat"], pred["theta_osc"], pred["gmk"],
                        pred["src_params"], pred["R"], f0, t_off,
                        int(x_true.shape[1]), sr, n_harm[0], n_harm[1],
