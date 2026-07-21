@@ -45,13 +45,22 @@ def gumbel_st(logits, temp=1.0, hard=True):
 
 
 class Estimator(tf.keras.Model):
-    def __init__(self, sr=16000, t_off=1.0):
+    def __init__(self, sr=16000, t_off=1.0, arch="v2"):
         super().__init__()
-        self.sr, self.t_off = sr, t_off
+        self.sr, self.t_off, self.arch = sr, t_off, arch
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
-        self.convs = [tf.keras.layers.Conv2D(c, 3, 2, "same", activation="relu")
-                      for c in (32, 64, 128)]
-        self.gap = tf.keras.layers.GlobalAveragePooling2D()
+        if arch == "v2":
+            # v8.2: 時間軸保存エンコーダ。周波数側を強くプーリング → BiGRU → attention pooling
+            self.convs = [tf.keras.layers.Conv2D(c, 3, st, "same", activation="relu")
+                          for c, st in ((32, (1, 2)), (64, (2, 2)),
+                                        (96, (1, 2)), (128, (2, 2)))]
+            self.bigru = tf.keras.layers.Bidirectional(
+                tf.keras.layers.GRU(128, return_sequences=True))
+            self.att = tf.keras.layers.Dense(1)
+        else:                                     # v1（最小骨格、比較用）
+            self.convs = [tf.keras.layers.Conv2D(c, 3, 2, "same", activation="relu")
+                          for c in (32, 64, 128)]
+            self.gap = tf.keras.layers.GlobalAveragePooling2D()
         self.trunk = tf.keras.layers.Dense(256, activation="relu")
         d = tf.keras.layers.Dense
         self.h_env = d(K * 5)
@@ -68,7 +77,15 @@ class Estimator(tf.keras.Model):
         h = mel[..., None]
         for c in self.convs:
             h = c(h)
-        h = self.gap(h)
+        if self.arch == "v2":
+            B = tf.shape(h)[0]
+            h = tf.reshape(h, [B, -1, h.shape[2] * h.shape[3]])       # [B,T',F'·C]
+            h = self.bigru(h)                                          # [B,T',256]
+            w = tf.nn.softmax(self.att(h), axis=1)
+            h = tf.concat([tf.reduce_sum(w * h, axis=1),
+                           tf.reduce_mean(h, axis=1)], axis=-1)        # [B,512]
+        else:
+            h = self.gap(h)
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
         return self.trunk(tf.concat([h, f0n], axis=-1))
 

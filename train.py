@@ -51,6 +51,7 @@ def parse_args():
     ap.add_argument("--eval_n", type=int, default=512)
     ap.add_argument("--eval_only", action="store_true")
     ap.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
+    ap.add_argument("--arch", type=str, default="v2", choices=["v1","v2"])
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -179,7 +180,7 @@ def main():
     fmax = E.F0_LO * 2 ** (100 / 1200)
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
 
-    model = E.Estimator(sr=SR, t_off=T_OFF)
+    model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch)
     opt = tf.keras.optimizers.Adam(args.lr)
     step_var = tf.Variable(0, dtype=tf.int64)
     ckpt = tf.train.Checkpoint(model=model, opt=opt, step=step_var)
