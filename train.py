@@ -123,6 +123,18 @@ def metrics_np(pred, batch, mapping, sr, t_off, N):
 
     out = {}
     out["P"], out["R"], out["F1"] = prf(slice(None))
+    # --- v8.4: 「検出」と「ソース同定」の分離診断 ---
+    # (a) 検出: どの列が変調されているか（ソース識別は問わない二値問題）
+    dTP = (pred_on & true_on).sum(); dFP = (pred_on & ~true_on).sum()
+    dFN = (~pred_on & true_on).sum()
+    dp = dTP / max(dTP + dFP, 1); dr = dTP / max(dTP + dFN, 1)
+    out["F1_detect"] = 2 * dp * dr / max(dp + dr, 1e-9)
+    out["detect_P"], out["detect_R"] = dp, dr
+    # (b) 同定: 検出が当たった列で、ソース番号まで合っている割合
+    both = pred_on & true_on
+    out["srcid_acc"] = float((g_pred[both] == z_re[both]).mean()) if both.any() else np.nan
+    # 参考: 予測アサイン本数 / サンプル
+    out["n_pred"] = float(pred_on.sum(1).mean()); out["n_true"] = float(true_on.sum(1).mean())
     out["FP_rate"] = fp.sum() / max(B * M, 1)
     for name, cols in (("core8", CORE8), ("cluster", CLUSTER), ("weak", WEAK)):
         out[f"F1_{name}"] = prf(cols)[2]
@@ -189,6 +201,8 @@ def main():
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
 
     model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch)
+    # v8.4: GRU 等の遅延構築レイヤをチェックポイント復元前にビルドしておく
+    model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)
     step_var = tf.Variable(0, dtype=tf.int64)
     ckpt = tf.train.Checkpoint(model=model, opt=opt, step=step_var)
@@ -275,7 +289,9 @@ def main():
         val = {}
         if step > 0 and step % args.val_every == 0:
             val = evaluate("val", args.eval_n)
-            print(f"  [val] F1={val['F1']:.3f} (core8 {val['F1_core8']:.3f} / "
+            print(f"  [val] F1={val['F1']:.3f} det={val['F1_detect']:.3f} "
+                  f"srcid={val['srcid_acc']:.3f} n={val['n_pred']:.1f}/{val['n_true']:.1f} "
+                  f"(core8 {val['F1_core8']:.3f} / "
                   f"cluster {val['F1_cluster']:.3f} / weak {val['F1_weak']:.3f}) "
                   f"FPrate={val['FP_rate']:.3f} depthMAE={val['depth_mae']:.3f} "
                   f"srcMAE={val['src_mae']:.3f} typeAcc={val['type_acc']:.3f} "
