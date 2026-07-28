@@ -188,8 +188,12 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     inv = tf.argsort(mapping, axis=1)                                 # true k → pred 行
     z = tf.cast(batch["z"], tf.int32)                                 # [B,M] (-1=∅)
     z_re = tf.where(z >= 0, tf.gather(inv, tf.maximum(z, 0), axis=1, batch_dims=1), K)
-    l_gate = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=z_re, logits=gate_lg))
+    # v8.5: ∅ クラス（17列中 ~13.5列）の重みを下げ、CE 勾配の ∅ 支配を緩和する。
+    #       none_w=1.0 で従来と同じ。lam["none_w"] で調整（既定 0.25）。
+    ce_g = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=z_re, logits=gate_lg)
+    w_none = lam.get("none_w", 1.0)
+    wg = tf.where(tf.equal(z_re, K), w_none * tf.ones_like(ce_g), tf.ones_like(ce_g))
+    l_gate = tf.reduce_sum(wg * ce_g) / tf.maximum(tf.reduce_sum(wg), 1e-6)
     t_lab = tf.cast(1.0 - true_type, tf.int32)                        # ENV→0, LFO→1
     ce_t = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=t_lab, logits=type_lg)                                 # [B,K]

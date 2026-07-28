@@ -33,7 +33,7 @@ K, M = ds.K_ENVS, ds.M_DEST
 CORE8 = [0, 1, 2, 3, 4, 7, 8, 10]
 CLUSTER = [10, 11, 15, 16]          # thresh, ratio, drive_d, mix_d（thresh は二重役割）
 WEAK = [5, 6, 9, 12, 13, 14]
-LAM = dict(spec=1.0, param=0.2, assign=1.0, sparse=0.03)
+LAM = dict(spec=1.0, param=0.2, assign=3.0, sparse=0.0, none_w=0.25)
 
 
 def parse_args():
@@ -56,6 +56,8 @@ def parse_args():
                     help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
     ap.add_argument("--spec_warmlen", type=int, default=5000,
                     help="warm0 以降、この長さで λ_spec を 0→設定値へ線形に上げる")
+    ap.add_argument("--none_w", type=float, default=0.25,
+                    help="ゲート CE における ∅ クラスの重み（1.0=従来）")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -195,6 +197,7 @@ def main():
     for g in tf.config.list_physical_devices("GPU"):
         tf.config.experimental.set_memory_growth(g, True)
 
+    LAM["none_w"] = args.none_w
     data = Data(args.data)
     SR, N, T_OFF = data.man["sr"], data.man["N"], data.man["t_off"]
     fmax = E.F0_LO * 2 ** (100 / 1200)
