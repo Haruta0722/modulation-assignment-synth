@@ -56,6 +56,10 @@ def parse_args():
                     help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
     ap.add_argument("--spec_warmlen", type=int, default=5000,
                     help="warm0 以降、この長さで λ_spec を 0→設定値へ線形に上げる")
+    ap.add_argument("--param_w", type=float, default=-1.0,
+                    help="λ_param を上書き（-1 で LAM の既定値 0.2 を使用）")
+    ap.add_argument("--spec_w", type=float, default=-1.0,
+                    help="λ_spec を上書き（-1 で LAM の既定値 1.0 を使用）")
     ap.add_argument("--none_w", type=float, default=0.25,
                     help="ゲート CE における ∅ クラスの重み（1.0=従来）")
     ap.add_argument("--seed", type=int, default=0)
@@ -282,6 +286,9 @@ def main():
         tf.config.experimental.set_memory_growth(g, True)
 
     LAM["none_w"] = args.none_w
+    if args.param_w >= 0: LAM["param"] = args.param_w
+    if args.spec_w >= 0:  LAM["spec"] = args.spec_w
+    print(f"LAM = {LAM}  spec_warm0={args.spec_warm0} warmlen={args.spec_warmlen}")
     data = Data(args.data)
     SR, N, T_OFF = data.man["sr"], data.man["N"], data.man["t_off"]
     fmax = E.F0_LO * 2 ** (100 / 1200)
