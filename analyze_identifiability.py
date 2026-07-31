@@ -78,19 +78,34 @@ def per_sample_metrics(pred, batch, mapping, sr, t_off, N):
     return rows
 
 
-def eig_features(Mb):
-    """M̄ の固有解析 → 局所識別可能性の特徴量"""
-    ev = np.linalg.eigvalsh(Mb)
-    ev = np.clip(ev, 0, None)
-    pos = ev[ev > TOL]
-    return dict(
-        eff_rank=len(pos),                                 # 実効ランク（大きいほど識別可能）
-        n_null=int((ev <= TOL).sum()),                     # 局所識別不能方向の数
-        lam_min_pos=float(pos.min()) if len(pos) else 0.0,
-        cond=float(ev.max() / max(pos.min(), 1e-12)) if len(pos) else np.inf,
-        logdet=float(np.log(pos + 1e-12).sum()),           # 情報量（体積）
+def eig_features(Mb, lam_max_raw=None):
+    """M̄ の固有解析 → 局所識別可能性の特徴量。
+    注意: M̄ = M/λmax と正規化しているため、絶対閾値による実効ランクは
+    λmax の大小に汚染される（λmax はサンプル間で 8 桁ばらつく）。
+    そこで閾値依存の指標に加えて、閾値不要の指標を併記する。"""
+    ev = np.clip(np.linalg.eigvalsh(Mb), 0, None)
+    tot = max(ev.sum(), 1e-12)
+    p = ev / tot
+    p = p[p > 0]
+    feats = dict(
+        # 閾値不要（推奨）: スペクトルエントロピーの指数 = 実質的な有効次元数
+        spec_ent=float(np.exp(-(p * np.log(p)).sum())),
+        # 上位方向への集中度（小さいほど情報が広く分布＝識別しやすい）
+        top1_share=float(ev.max() / tot),
+        top5_share=float(np.sort(ev)[-5:].sum() / tot),
+        # 生の知覚感度（正規化前）: 「そもそも音が動くか」
+        lam_max_raw=float(lam_max_raw) if lam_max_raw is not None else np.nan,
         trace=float(ev.sum()),
     )
+    # 閾値依存（比較用に複数閾値）
+    for t in (1e-6, 1e-4, 1e-3, 1e-2):
+        feats[f"eff_rank_{t:g}"] = int((ev > t).sum())
+    feats["eff_rank"] = feats["eff_rank_0.001"]          # 既定を 1e-3 に
+    feats["n_null"] = int((ev <= 1e-3).sum())
+    pos = ev[ev > 1e-3]
+    feats["logdet"] = float(np.log(pos + 1e-12).sum()) if len(pos) else -np.inf
+    feats["lam_min_pos"] = float(pos.min()) if len(pos) else 0.0
+    return feats
 
 
 def block_nullspace(Mb):
@@ -145,11 +160,16 @@ def main():
     print(f"復元指標: {len(recs)} サンプル")
 
     # --- M の固有解析 ---
+    # 生の λmax（正規化前スケール）が manifest にあれば読む
+    lam_raw = None
+    lam_path = os.path.join(mdir, "lambda_max.npy")
+    if os.path.exists(lam_path):
+        lam_raw = np.load(lam_path)[:n_M]
     feats, blocks = [], []
     for i in range(n_M):
         Mb = np.array(Mmm[i], dtype=np.float64)
         Mb = 0.5 * (Mb + Mb.T)
-        feats.append(eig_features(Mb))
+        feats.append(eig_features(Mb, lam_max_raw=lam_raw[i] if lam_raw is not None else None))
         blocks.append(block_nullspace(Mb))
 
     keys_f = list(feats[0].keys())
@@ -163,7 +183,10 @@ def main():
         ra, rb = ra - ra.mean(), rb - rb.mean()
         return float((ra * rb).sum() / np.sqrt((ra ** 2).sum() * (rb ** 2).sum() + 1e-12))
     rows = []
-    for fk in ("eff_rank", "n_null", "logdet", "lam_min_pos"):
+    for fk in ("spec_ent", "top1_share", "eff_rank_0.01", "eff_rank_0.001",
+               "eff_rank_0.0001", "eff_rank_1e-06", "lam_max_raw", "logdet"):
+        if fk not in Fm or not np.isfinite(Fm[fk]).any():
+            continue
         for rk in ("F1", "F1_detect", "desc_rec"):
             v = np.isfinite(Fm[fk]) & np.isfinite(Rm[rk])
             rho = spearman(Fm[fk][v], Rm[rk][v])
@@ -172,9 +195,11 @@ def main():
 
     # --- 四分位層別 ---
     print("\n== 実効ランク四分位による層別（主張D の中心的な表） ==")
-    q = np.quantile(Fm["eff_rank"], [0.25, 0.5, 0.75])
-    lab = np.digitize(Fm["eff_rank"], q)
-    print(f"{'層':12s} {'n':>5s} {'eff_rank':>9s} {'F1':>7s} {'detect':>7s} {'desc':>7s}")
+    strat_key = os.environ.get("STRAT_KEY", "spec_ent")
+    print(f"（層別キー = {strat_key}。STRAT_KEY 環境変数で変更可）")
+    q = np.quantile(Fm[strat_key], [0.25, 0.5, 0.75])
+    lab = np.digitize(Fm[strat_key], q)
+    print(f"{'層':12s} {'n':>5s} {strat_key:>12s} {'F1':>7s} {'detect':>7s} {'desc':>7s}")
     strat = []
     for g, nm in enumerate(["Q1 (hard)", "Q2", "Q3", "Q4 (easy)"]):
         s = lab == g
@@ -197,10 +222,10 @@ def main():
              blocks=np.array([[b[k] for k in BLOCKS] for b in blocks]))
 
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
-    ax[0].scatter(Fm["eff_rank"], Rm["F1"], s=8, alpha=0.4)
-    ax[0].set_xlabel("effective rank of $\\bar M(\\theta)$ (local identifiability)")
+    ax[0].scatter(Fm[strat_key], Rm["F1"], s=8, alpha=0.4)
+    ax[0].set_xlabel(f"{strat_key} of $\\bar M(\\theta)$ (local identifiability)")
     ax[0].set_ylabel("per-sample F1")
-    ax[0].set_title(f"identifiability vs recovery (ρ={spearman(Fm['eff_rank'], Rm['F1']):+.2f})")
+    ax[0].set_title(f"identifiability vs recovery (ρ={spearman(Fm[strat_key], Rm['F1']):+.2f})")
     ax[0].grid(alpha=.3)
     if strat:
         xs = np.arange(len(strat))

@@ -133,6 +133,8 @@ def main():
               "(--J 6 --Q 4) / 件数を絞る (--n)")
         return
 
+    lam_path = os.path.join(out_dir, "lambda_max.npy")
+    lam_arr = (np.load(lam_path) if os.path.exists(lam_path) else np.zeros(n, np.float64))
     t0 = time.time()
     start_at = st["done"]
     for i in range(st["done"], n):
@@ -146,9 +148,11 @@ def main():
         Mm = J @ J.T                                     # [P,P]
         lmax = float(np.linalg.eigvalsh(Mm)[-1])
         mm[i] = (Mm / max(lmax, 1e-12)).astype(np.float32)
+        lam_arr[i] = lmax                       # 正規化前スケール（識別可能性の絶対指標）
         st["done"] = i + 1
         if (i + 1) % 2 == 0 or i + 1 == n:
             mm.flush()
+            np.save(lam_path, lam_arr)
             json.dump(st, open(man_path, "w"), indent=1)
             el = time.time() - t0
             n_this_run = i + 1 - start_at
@@ -158,6 +162,7 @@ def main():
             print(f"  [{done_now}/{n}]  {60*speed:.2f} samples/min  "
                   f"ETA {eta:.1f} h  (lambda_max={lmax:.3e})", flush=True)
     mm.flush()
+    np.save(lam_path, lam_arr)
     json.dump(st, open(man_path, "w"), indent=1)
     print(f"done: {st['done']}/{n} → {bin_path} ({os.path.getsize(bin_path)/1e6:.0f} MB)")
 
