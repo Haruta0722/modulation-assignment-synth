@@ -184,6 +184,90 @@ def metrics_np(pred, batch, mapping, sr, t_off, N):
     t_pred = tf.argmax(E.gather_rows(pred["type_logits"], mapping), -1,
                        output_type=tf.int32).numpy()
     out["type_acc"] = float((t_pred == t_lab).mean())
+
+    # ================= v8.6: 厳密な復元指標（主張C を支える数字） =================
+    # 「配線が当たった」だけでは生成過程の説明にならない。列単位で
+    #   (1) ソース番号  (2) そのソースの型 ENV/LFO  (3) 深さ  (4) ソース形状
+    # がすべて揃って初めて「その列の変調を復元した」とみなす。
+    R_true_col = Rt.sum(axis=1)                                   # [B,M] 列の真の深さ
+    R_hat_col = R_hat.sum(axis=1)                                 # [B,M] 予測（列スパース）
+    e_true_all = ds.sources(batch["src_params"], batch["src_type"],
+                            t_off, N, sr).numpy()                 # [B,K,N]
+    sp_m = E.gather_rows(pred["src_params"], mapping)
+    st_m = E.gather_rows(pred["type_oh"][..., 0], mapping)
+    e_pred_all = ds.sources(sp_m, st_m, t_off, N, sr).numpy()
+    shape_err_k = np.abs(e_true_all - e_pred_all).mean(-1)        # [B,K]
+
+    DEPTH_TOL, SHAPE_TOL = 0.1, 0.1
+
+    # ===== v8.7 水準1: 変調記述の復元（ソース番号を問わない = 主張C の本体） =====
+    # ソース番号は正準順序という人為的規約が与えたラベルであり物理的意味を持たない。
+    # 意味を持つのは「どの型・どの形状の変調信号が、どの深さで、どの変調先に刺さるか」。
+    # → 検出が当たった列について、予測ソース(番号は任意)の型・形状・深さが真と一致するかを見る。
+    desc_hit, desc_grp = [], {"core8": [], "cluster": [], "weak": []}
+    for b in range(B):
+        for m in range(M):
+            k_t = z_re[b, m]
+            k_p = g_pred[b, m]
+            if k_t >= K or k_p >= K:              # 真が∅ or 予測が∅ → 記述の復元対象外
+                continue
+            ok_type = bool(t_pred[b, k_p] == t_lab[b, k_t])
+            ok_depth = bool(abs(R_hat_col[b, m] - R_true_col[b, m]) <= DEPTH_TOL)
+            # 形状は「予測ソース k_p の信号」と「真ソース k_t の信号」を直接比較
+            ok_shape = bool(np.abs(e_pred_all[b, k_p] - e_true_all[b, k_t]).mean()
+                            <= SHAPE_TOL)
+            good = ok_type and ok_depth and ok_shape
+            desc_hit.append(good)
+            for g, cols in (("core8", CORE8), ("cluster", CLUSTER), ("weak", WEAK)):
+                if m in cols:
+                    desc_grp[g].append(good)
+    out["desc_rec_rate"] = float(np.sum(desc_hit)) / max(int(true_on.sum()), 1)
+    out["desc_rec_on_det"] = float(np.mean(desc_hit)) if desc_hit else np.nan
+    for g in ("core8", "cluster", "weak"):
+        ng = int(true_on[:, {"core8": CORE8, "cluster": CLUSTER, "weak": WEAK}[g]].sum())
+        out[f"desc_rec_{g}"] = float(np.sum(desc_grp[g])) / max(ng, 1)
+
+    # ===== v8.7 水準2: 共動構造の復元（番号ラベルに依存しない構造の一致） =====
+    # 「同じソースを共有する変調先ペア」の集合が真と一致するか（ペア単位 P/R/F1）。
+    co_tp = co_fp = co_fn = 0
+    for b in range(B):
+        for m1 in range(M):
+            for m2 in range(m1 + 1, M):
+                t_share = (z_re[b, m1] < K) and (z_re[b, m1] == z_re[b, m2])
+                p_share = (g_pred[b, m1] < K) and (g_pred[b, m1] == g_pred[b, m2])
+                co_tp += t_share and p_share
+                co_fp += p_share and not t_share
+                co_fn += t_share and not p_share
+    cp = co_tp / max(co_tp + co_fp, 1); cr = co_tp / max(co_tp + co_fn, 1)
+    out["comove_P"], out["comove_R"] = cp, cr
+    out["comove_F1"] = 2 * cp * cr / max(cp + cr, 1e-9)
+    cols_srcid, cols_type, cols_depth, cols_shape, cols_full = [], [], [], [], []
+    grp = {"core8": [], "cluster": [], "weak": []}
+    for b in range(B):
+        for m in range(M):
+            k = z_re[b, m]
+            if k >= K or g_pred[b, m] != k:      # 検出＋ソース同定に成功した列のみ
+                continue
+            ok_type = bool(t_pred[b, k] == t_lab[b, k])
+            ok_depth = bool(abs(R_hat_col[b, m] - R_true_col[b, m]) <= DEPTH_TOL)
+            ok_shape = bool(shape_err_k[b, k] <= SHAPE_TOL)
+            full = ok_type and ok_depth and ok_shape
+            cols_srcid.append(1); cols_type.append(ok_type)
+            cols_depth.append(ok_depth); cols_shape.append(ok_shape); cols_full.append(full)
+            for g, cols in (("core8", CORE8), ("cluster", CLUSTER), ("weak", WEAK)):
+                if m in cols:
+                    grp[g].append(full)
+    nsrc = max(len(cols_srcid), 1)
+    out["typeacc_on_hit"] = float(np.mean(cols_type)) if cols_srcid else np.nan
+    out["depth_ok_on_hit"] = float(np.mean(cols_depth)) if cols_srcid else np.nan
+    out["shape_ok_on_hit"] = float(np.mean(cols_shape)) if cols_srcid else np.nan
+    # 条件付き（同定成功列のうち完全復元）と、全真配線に対する絶対率
+    out["full_rec_on_hit"] = float(np.mean(cols_full)) if cols_srcid else np.nan
+    out["full_rec_rate"] = float(np.sum(cols_full)) / max(int(true_on.sum()), 1)
+    for g in ("core8", "cluster", "weak"):
+        n_true_g = int(true_on[:, {"core8": CORE8, "cluster": CLUSTER,
+                                   "weak": WEAK}[g]].sum())
+        out[f"full_rec_{g}"] = (float(np.sum(grp[g])) / max(n_true_g, 1))
     lo = (t_lab == 1) & (batch["src_params"].numpy()[..., 0] * (N / sr) < 1.0)
     if lo.any():
         out["type_acc_lowrate"] = float((t_pred == t_lab)[lo].mean())
@@ -292,7 +376,9 @@ def main():
         val = {}
         if step > 0 and step % args.val_every == 0:
             val = evaluate("val", args.eval_n)
-            print(f"  [val] F1={val['F1']:.3f} det={val['F1_detect']:.3f} "
+            print(f"  [val] F1={val['F1']:.3f} desc={val['desc_rec_rate']:.3f} "
+                  f"comove={val['comove_F1']:.3f} full={val['full_rec_rate']:.3f} "
+                  f"det={val['F1_detect']:.3f} "
                   f"srcid={val['srcid_acc']:.3f} n={val['n_pred']:.1f}/{val['n_true']:.1f} "
                   f"(core8 {val['F1_core8']:.3f} / "
                   f"cluster {val['F1_cluster']:.3f} / weak {val['F1_weak']:.3f}) "
