@@ -38,7 +38,7 @@ R_MAX = 0.6
 
 
 # ---------------------------------------------------------------- データ生成
-def make_batch(rng, n, task, sr, N, t_off):
+def make_batch(rng, n, task, sr, N, t_off, fix_dest=-1):
     """診断用データ。task=single なら 1列・1ソースのみ"""
     theta = rng.uniform(0.2, 0.6, (n, M)).astype(np.float32)
     theta[:, 3] = np.minimum(theta[:, 2] + 0.1, 0.95)
@@ -64,7 +64,7 @@ def make_batch(rng, n, task, sr, N, t_off):
     dest = np.zeros((n,), np.int64)
     if task == "single":
         # 1列・1ソース。変調先は「王道」から選ぶ（level1, cutoff, rate, depth）
-        cand = np.array([0, 4, 7, 8])
+        cand = np.array([fix_dest]) if fix_dest >= 0 else np.array([0, 4, 7, 8])
         dest = cand[rng.integers(0, len(cand), n)]
         for i in range(n):
             R[i, 0, dest[i]] = rng.uniform(0.3, 0.8) * (1 if rng.random() < .5 else -1)
@@ -132,6 +132,8 @@ def main():
     ap.add_argument("--T", type=float, default=1.5)
     ap.add_argument("--toff", type=float, default=1.0)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--dest", type=int, default=-1,
+                    help="変調先を1つに固定（0-16）。-1 なら王道4列からランダム")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -168,11 +170,12 @@ def main():
         opt.apply_gradients(zip(g, model.trainable_variables))
         return loss
 
-    print(f"task={args.task}  hop={args.hop} mel={args.mel} frames={n_frames}")
+    dn = ds.dest_specs(SR)[args.dest][0] if args.dest >= 0 else "王道4列"
+    print(f"task={args.task}  hop={args.hop} mel={args.mel} frames={n_frames} dest={dn}")
     hist = []
     for it in range(args.steps + 1):
         th, osc, gmk, src, styp, R, f0, dest = make_batch(
-            rng, args.batch, args.task, SR, N, T_OFF)
+            rng, args.batch, args.task, SR, N, T_OFF, args.dest)
         x = synth(*[tf.constant(v) for v in (th, osc, gmk, src, R, f0, styp)])
         y = target_env(src, styp, dest, R)
         doh = tf.constant(np.eye(M, dtype=np.float32)[dest])
@@ -185,14 +188,14 @@ def main():
     oks, maes = [], []
     for _ in range(20):
         th, osc, gmk, src, styp, R, f0, dest = make_batch(
-            rng, args.batch, args.task, SR, N, T_OFF)
+            rng, args.batch, args.task, SR, N, T_OFF, args.dest)
         x = synth(*[tf.constant(v) for v in (th, osc, gmk, src, R, f0, styp)])
         y = target_env(src, styp, dest, R)
         doh = tf.constant(np.eye(M, dtype=np.float32)[dest])
         p = model(x, tf.constant(f0), doh).numpy()
         e = np.abs(p - y).mean(1)
         maes += list(e); oks += list(e <= 0.1)
-    print(f"\n== task={args.task} hop={args.hop} mel={args.mel} ==")
+    print(f"\n== task={args.task} hop={args.hop} mel={args.mel} dest={dn} ==")
     print(f"  shape MAE   = {np.mean(maes):.4f}")
     print(f"  shape_ok    = {np.mean(oks):.3f}   (現行モデルの shape_ok_on_hit ≈ 0.089)")
     print("  判定: shape_ok が高い → 情報は音にある（分離/出力表現の問題）")
