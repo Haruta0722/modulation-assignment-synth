@@ -162,11 +162,21 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     type_lg = gather_rows(pred["type_logits"], mapping)
     R_hat = gather_rows(pred["R"], mapping)
 
-    # --- λI 版 PNP（重みなし二乗和。M̄ 導入時に二次形式へ差し替え） ---
-    l_stat = tf.reduce_mean(tf.reduce_sum((pred["theta_stat"] - batch["theta_stat"]) ** 2, -1))
-    l_static = tf.reduce_mean(tf.reduce_sum((pred["theta_osc"] - batch["theta_osc"]) ** 2, -1)
-                              + (pred["gmk"] - batch["gmk"]) ** 2)
-    l_R = tf.reduce_mean(tf.reduce_sum((R_hat - true_R) ** 2, [1, 2]))
+    # --- param 損失: λI 版（等方 L2）／対角知覚計量版（v8.8）を lam["mdiag"] で切替 ---
+    # mdiag: [P] の知覚感度ベクトル（precompute_Mdiag.py の d_mean）。None なら等方。
+    md = lam.get("mdiag", None)
+    def _w(sl):                      # θ_all の該当スライスの重み（[..]）
+        if md is None:
+            return 1.0
+        return tf.constant(md[sl[0]:sl[1]], tf.float32)
+
+    l_stat = tf.reduce_mean(tf.reduce_sum(
+        _w((0, 17)) * (pred["theta_stat"] - batch["theta_stat"]) ** 2, -1))
+    l_static = tf.reduce_mean(tf.reduce_sum(
+        _w((17, 19)) * (pred["theta_osc"] - batch["theta_osc"]) ** 2, -1)
+        + (1.0 if md is None else float(md[19])) * (pred["gmk"] - batch["gmk"]) ** 2)
+    wR = 1.0 if md is None else tf.reshape(tf.constant(md[40:108], tf.float32), [K, M])
+    l_R = tf.reduce_mean(tf.reduce_sum(wR * (R_hat - true_R) ** 2, [1, 2]))
     z_all = tf.cast(batch["z"], tf.int32)                             # [B,M]
     used = tf.reduce_any(tf.equal(z_all[:, :, None],
                                   tf.range(K, dtype=tf.int32)[None, None, :]),
@@ -174,12 +184,15 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     uf = tf.cast(used, tf.float32)
     nu = tf.maximum(tf.reduce_sum(uf), 1.0)
     is_env = true_type                                                # [B,K]
-    d_env = tf.reduce_sum(((src_p - batch["src_params"]) / SLOT_SCALE_ENV) ** 2, -1)
+    wS = (tf.ones([K, 5]) if md is None
+          else tf.reshape(tf.constant(md[20:40], tf.float32), [K, 5]))
+    d_env = tf.reduce_sum(wS * ((src_p - batch["src_params"]) / SLOT_SCALE_ENV) ** 2, -1)
     dphi = tf.abs(src_p[..., 1] - batch["src_params"][..., 1])
     circ = tf.minimum(dphi, 1.0 - dphi)
     lr_n = (tf.math.log(tf.maximum(src_p[..., 0], 1e-3) / 0.1)
             - tf.math.log(tf.maximum(batch["src_params"][..., 0], 1e-3) / 0.1)) / np.log(100.0)
-    d_lfo = lr_n ** 2 + circ ** 2 + (src_p[..., 2] - batch["src_params"][..., 2]) ** 2
+    d_lfo = (wS[:, 0] * lr_n ** 2 + wS[:, 1] * circ ** 2
+             + wS[:, 2] * (src_p[..., 2] - batch["src_params"][..., 2]) ** 2)
     l_src = tf.reduce_sum(uf * (is_env * d_env + (1 - is_env) * d_lfo)) / nu
     l_param = l_stat + l_static + l_R + l_src
 

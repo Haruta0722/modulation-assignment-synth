@@ -56,6 +56,10 @@ def parse_args():
                     help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
     ap.add_argument("--spec_warmlen", type=int, default=5000,
                     help="warm0 以降、この長さで λ_spec を 0→設定値へ線形に上げる")
+    ap.add_argument("--mdiag", type=str, default="",
+                    help="Mdiag.npz のパス。指定すると param 損失が知覚感度で重み付けされる")
+    ap.add_argument("--mdiag_pow", type=float, default=1.0,
+                    help="重みの強さ w = d^pow（0=等方, 1=そのまま, 0.5=緩やか）")
     ap.add_argument("--param_w", type=float, default=-1.0,
                     help="λ_param を上書き（-1 で LAM の既定値 0.2 を使用）")
     ap.add_argument("--spec_w", type=float, default=-1.0,
@@ -286,6 +290,13 @@ def main():
         tf.config.experimental.set_memory_growth(g, True)
 
     LAM["none_w"] = args.none_w
+    if args.mdiag:
+        _d = np.load(args.mdiag)["d_mean"].astype(np.float32)
+        _d = np.maximum(_d, 1e-8) ** args.mdiag_pow
+        _d = _d / _d.mean()                      # 平均1に正規化（λ_param の意味を保つ）
+        LAM["mdiag"] = _d
+        print(f"mdiag loaded: {args.mdiag} pow={args.mdiag_pow} "
+              f"(min {_d.min():.3e} / max {_d.max():.3e})")
     if args.param_w >= 0: LAM["param"] = args.param_w
     if args.spec_w >= 0:  LAM["spec"] = args.spec_w
     print(f"LAM = {LAM}  spec_warm0={args.spec_warm0} warmlen={args.spec_warmlen}")
