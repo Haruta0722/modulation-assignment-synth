@@ -36,8 +36,10 @@ K, M = ds.K_ENVS, ds.M_DEST
 
 
 def make_conc(rng, n, target, sr, N, t_off, n_mod=1, interferers=None,
-              inter_depth=None):
-    """対象 target に1本、加えて干渉変調を n_mod-1 本（または指定リスト）刺す"""
+              inter_depth=None, rand_src=False):
+    """対象 target に1本、加えて干渉変調を n_mod-1 本（または指定リスト）刺す。
+    rand_src=True なら対象をソース0固定でなくランダムなソースに割り当てる
+    （= ソース帰属を教えない条件）。戻り値に対象ソース番号 k_tgt を含む。"""
     theta = rng.uniform(0.25, 0.55, (n, M)).astype(np.float32)
     theta[:, 3] = np.minimum(theta[:, 2] + 0.1, 0.95)
     R = np.zeros((n, K, M), np.float32)
@@ -57,18 +59,22 @@ def make_conc(rng, n, target, sr, N, t_off, n_mod=1, interferers=None,
     src = np.where(styp[..., None] == 1.0, env_p, lfo_p).astype(np.float32)
 
     pool = [m for m in range(M) if m != target]
+    k_tgt = np.zeros(n, np.int32)
     for i in range(n):
-        # 対象は必ずソース0
+        # 対象ソース: 固定なら 0、rand_src なら 0..K-1 から一様
+        kt = int(rng.integers(0, K)) if rand_src else 0
+        k_tgt[i] = kt
         dep = rng.uniform(0.3, 0.8) * (1 if rng.random() < .5 else -1)
         theta[i, target] = np.clip(theta[i, target], 0.15, 1 - abs(dep))
-        R[i, 0, target] = dep
-        # 干渉源
+        R[i, kt, target] = dep
+        # 干渉源（対象ソース以外に割り当て）
         if interferers is not None:
             cols = list(interferers)
         else:
             cols = list(rng.choice(pool, max(n_mod - 1, 0), replace=False))
+        others = [k for k in range(K) if k != kt]
         for j, m in enumerate(cols):
-            k = 1 + (j % (K - 1))                    # ソース1..3 に割り当て
+            k = others[j % len(others)]
             dd = (inter_depth if inter_depth is not None
                   else rng.uniform(0.3, 0.8)) * (1 if rng.random() < .5 else -1)
             if abs(dd) < 1e-6:
@@ -79,10 +85,11 @@ def make_conc(rng, n, target, sr, N, t_off, n_mod=1, interferers=None,
     gmk = rng.uniform(0, 1, (n,)).astype(np.float32)
     f0 = (440.0 * 2 ** ((np.array([36, 48, 60, 72, 84])[
         rng.integers(0, 5, n)] - 69) / 12)).astype(np.float32)
-    return theta, osc, gmk, src, styp, R, f0
+    return theta, osc, gmk, src, styp, R, f0, k_tgt
 
 
-def run_one(args, rng, n_mod=1, interferers=None, inter_depth=None, tag=""):
+def run_one(args, rng, n_mod=1, interferers=None, inter_depth=None,
+            rand_src=False, tag=""):
     """1 条件を学習して shape_ok を返す"""
     SR, N, T_OFF = args.sr, int(args.sr * args.T), args.toff
     n_frames = 1 + (N - 1024) // args.hop
@@ -100,12 +107,13 @@ def run_one(args, rng, n_mod=1, interferers=None, inter_depth=None, tag=""):
     idx = np.minimum(np.arange(n_frames) * args.hop + 512, N - 1)
 
     def batch():
-        th, osc, gmk, src, styp, R, f0 = make_conc(
+        th, osc, gmk, src, styp, R, f0, k_tgt = make_conc(
             rng, args.batch, args.target, SR, N, T_OFF, n_mod,
-            interferers, inter_depth)
+            interferers, inter_depth, rand_src)
         x = synth(*[tf.constant(v) for v in (th, osc, gmk, src, R, f0, styp)])
         e = ds.sources(tf.constant(src), tf.constant(styp), T_OFF, N, SR).numpy()
-        y = e[:, 0][:, idx].astype(np.float32)        # 対象はソース0
+        # 対象列を動かしているソースの軌跡（rand_src なら毎回別のソース番号）
+        y = e[np.arange(len(k_tgt)), k_tgt][:, idx].astype(np.float32)
         return x, tf.constant(f0), tf.constant(y)
 
     @tf.function(reduce_retracing=True)
@@ -143,6 +151,8 @@ def main():
     ap.add_argument("--toff", type=float, default=1.0)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--rand_src", action="store_true",
+                    help="対象ソースをランダム配置（= ソース帰属を教えない）")
     ap.add_argument("--pair_list", type=str, default="",
                     help="pair モードで調べる干渉源（既定は代表8列）")
     args = ap.parse_args()
@@ -150,24 +160,28 @@ def main():
     tname = names[args.target]
 
     if args.mode == "nway":
-        print(f"[nway] target={tname}: 同時変調本数を変えて軌跡復元を測る")
-        print(f"{'J':>3s} {'shape_ok':>9s} {'MAE':>7s}")
+        print(f"[nway] target={tname}: 同時変調本数 × ソース帰属の有無")
+        print(f"{'J':>3s} {'固定src':>9s} {'ランダムsrc':>11s} {'差':>8s}")
         for J in (1, 2, 3, 4, 5):
             rng = np.random.default_rng(args.seed)
-            ok, mae = run_one(args, rng, n_mod=J)
-            print(f"{J:3d} {ok:9.3f} {mae:7.4f}", flush=True)
+            ok_f, _ = run_one(args, rng, n_mod=J, rand_src=False)
+            rng = np.random.default_rng(args.seed)
+            ok_r, _ = run_one(args, rng, n_mod=J, rand_src=True)
+            print(f"{J:3d} {ok_f:9.3f} {ok_r:11.3f} {ok_r - ok_f:+8.3f}", flush=True)
+        print("\n  読み: 差が大きい → ソース帰属が主因（配線の同定問題）")
+        print("        差が小さい → 重畳そのものが主因")
 
     elif args.mode == "pair":
         cand = ([int(v) for v in args.pair_list.split(",")] if args.pair_list
                 else [0, 5, 6, 8, 10, 13, 15, 16])
         cand = [c for c in cand if c != args.target]
         rng = np.random.default_rng(args.seed)
-        ok0, mae0 = run_one(args, rng, n_mod=1)
+        ok0, mae0 = run_one(args, rng, n_mod=1, rand_src=args.rand_src)
         print(f"[pair] target={tname}  単独 shape_ok={ok0:.3f}")
         print(f"{'干渉源':10s} {'shape_ok':>9s} {'低下':>7s}")
         for c in cand:
             rng = np.random.default_rng(args.seed)
-            ok, _ = run_one(args, rng, interferers=[c])
+            ok, _ = run_one(args, rng, interferers=[c], rand_src=args.rand_src)
             print(f"{names[c]:10s} {ok:9.3f} {ok - ok0:+7.3f}", flush=True)
 
     else:  # mask
@@ -177,7 +191,7 @@ def main():
         for dep in (0.0, 0.2, 0.4, 0.6, 0.8):
             rng = np.random.default_rng(args.seed)
             ok, mae = run_one(args, rng, interferers=[args.interferer],
-                              inter_depth=dep)
+                              inter_depth=dep, rand_src=args.rand_src)
             print(f"{dep:6.1f} {ok:9.3f} {mae:7.4f}", flush=True)
         print("\n  読み: 深さに比例して低下 → マスキング（痕跡が覆い隠される）")
         print("        ある深さで急落      → 混同（両者が区別できなくなる）")
