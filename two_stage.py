@@ -190,6 +190,12 @@ def main():
                     help="第二: Stage2 の反復修正回数（0=無効, 推奨 2〜3）")
     ap.add_argument("--use_feat", action="store_true",
                     help="第三: 軌跡から明示的特徴を抽出して併用")
+    ap.add_argument("--s2_input", choices=["stage1", "true", "noisy"],
+                    default="stage1",
+                    help="Stage2 の入力: stage1=通常 / true=真の軌跡（上限診断） / "
+                         "noisy=真の軌跡+ノイズ（誤差耐性の測定）")
+    ap.add_argument("--noise", type=float, default=0.1,
+                    help="s2_input=noisy のときの付加ノイズ標準偏差")
     ap.add_argument("--detach", action="store_true",
                     help="Stage2 の勾配を Stage1 に流さない")
     ap.add_argument("--steps", type=int, default=3000)
@@ -244,7 +250,13 @@ def main():
             traj = s1(x, f0)
             loss = tf.reduce_mean(tf.abs(traj - y))          # Stage1 教師（信号空間）
             if s2 is not None:
-                inp = tf.stop_gradient(traj) if args.detach else traj
+                if args.s2_input == "true":
+                    inp = y                                   # 真の軌跡（上限診断）
+                elif args.s2_input == "noisy":
+                    inp = tf.clip_by_value(
+                        y + tf.random.normal(tf.shape(y), 0.0, args.noise), 0.0, 1.0)
+                else:
+                    inp = tf.stop_gradient(traj) if args.detach else traj
                 p, st, tl = s2(inp)
                 rec = reconstruct(p, st)
                 # Stage2 教師: 真の軌跡への一致（＋型 CE）
@@ -296,7 +308,8 @@ def main():
 
     print(f"mode={args.mode}  target={tname}  n_mod={args.n_mod}  "
           f"detach={args.detach}  param_sup={args.param_sup}  "
-          f"refine={args.refine}  use_feat={args.use_feat}  frames={n_frames}")
+          f"refine={args.refine}  use_feat={args.use_feat}  "
+          f"s2_input={args.s2_input}  frames={n_frames}")
     hist = []
     for it in range(args.steps + 1):
         x, f0, y, tt, pt = batch()
@@ -317,7 +330,14 @@ def main():
         else:
             traj = s1(x, f0)
             if s2 is not None:
-                p, st, tl = s2(traj)
+                if args.s2_input == "true":
+                    inp_e = y
+                elif args.s2_input == "noisy":
+                    inp_e = tf.clip_by_value(
+                        y + tf.random.normal(tf.shape(y), 0.0, args.noise), 0.0, 1.0)
+                else:
+                    inp_e = traj
+                p, st, tl = s2(inp_e)
                 rec = reconstruct(p, st).numpy()
             else:
                 rec, tl = None, None
@@ -336,7 +356,12 @@ def main():
               f"MAE = {np.mean(mae_final):.4f}")
         print(f"  type_acc = {np.mean(tacc):.3f}")
         print(f"  段間の損失 = {np.mean(ok_s1) - np.mean(ok_final):+.3f}")
-    print("\n  参照値（diag_output, target=cutoff, J=1）: free 0.729 / param 0.333")
+    print("\n  参照値: free 0.729 / 単段 param 0.099 / 二段 baseline 0.359")
+    if args.s2_input == "true":
+        print("  読み: これは Stage2 の**上限**（入力が完璧な場合）。")
+        print("        高い（>0.8）→ Stage1 の誤差が Stage2 を壊している")
+        print("        低い（<0.5）→ Stage2 自体の学習能力が限界")
+        print("        ceiling（勾配降下 500 反復）= 1.000 との差が「一発推定の代償」")
 
 
 if __name__ == "__main__":
