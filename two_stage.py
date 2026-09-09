@@ -190,6 +190,9 @@ def main():
                     help="第二: Stage2 の反復修正回数（0=無効, 推奨 2〜3）")
     ap.add_argument("--use_feat", action="store_true",
                     help="第三: 軌跡から明示的特徴を抽出して併用")
+    ap.add_argument("--tto", type=int, default=0,
+                    help="推論時最適化（test-time optimization）の反復数。0=無効, 推奨 50")
+    ap.add_argument("--tto_lr", type=float, default=0.05)
     ap.add_argument("--s2_input", choices=["stage1", "true", "noisy"],
                     default="stage1",
                     help="Stage2 の入力: stage1=通常 / true=真の軌跡（上限診断） / "
@@ -243,6 +246,61 @@ def main():
         """パラメータ → 軌跡（フレーム）"""
         e = ds.sources(p, st, T_OFF, N, SR)[:, 0]
         return tf.gather(e, fidx, axis=1)
+
+    def params_to_free(p, st):
+        """パラメータ → 自由変数（sigmoid の逆写像）。TTO の初期値に使う"""
+        eps = 1e-4
+        def inv(v):
+            v = tf.clip_by_value(v, eps, 1 - eps)
+            return tf.math.log(v / (1 - v))
+        a, h, d, sus, r = [p[:, 0, i] for i in range(5)]
+        v_env = tf.stack([
+            inv(a / T_OFF),
+            inv(h / tf.maximum(T_OFF - a, eps)),
+            inv(d / tf.maximum(T_OFF - a - h, eps)),
+            inv(sus), inv(r / R_MAX)], -1)
+        rate, ph, mo = p[:, 0, 0], p[:, 0, 1], p[:, 0, 2]
+        v_lfo = tf.stack([
+            inv(tf.math.log(tf.maximum(rate, 1e-3) / 0.5) / np.log(20.0)),
+            tf.cos(2 * np.pi * ph), tf.sin(2 * np.pi * ph), inv(mo)], -1)
+        return v_env, v_lfo
+
+    def free_to_params(v_env, v_lfo, w):
+        ue = tf.sigmoid(v_env)
+        a = tf.maximum(ue[:, 0] * T_OFF, 1e-3)
+        h = ue[:, 1] * (T_OFF - a)
+        d = tf.maximum(ue[:, 2] * (T_OFF - a - h), 1e-3)
+        p_env = tf.stack([a, h, d, ue[:, 3], ue[:, 4] * R_MAX + 1e-3], -1)
+        rate = 0.5 * tf.pow(20.0, tf.sigmoid(v_lfo[:, 0]))
+        phase = tf.math.floormod(
+            tf.atan2(v_lfo[:, 2], v_lfo[:, 1]) / (2 * np.pi), 1.0)
+        z = tf.zeros_like(rate)
+        p_lfo = tf.stack([rate, phase, tf.sigmoid(v_lfo[:, 3]), z, z], -1)
+        ww = w[:, None]
+        return (ww * p_env + (1 - ww) * p_lfo)[:, None, :]
+
+    def test_time_opt(p0, st, target_traj, iters, lr):
+        """Stage2 の出力を初期値に、軌跡一致で勾配降下（推論時最適化）。
+        非凸な逆問題を「学習された初期値 + 局所探索」で解く構成。
+        モデル重みは動かさず、この入力に対するパラメータのみ最適化する。"""
+        v_env, v_lfo = params_to_free(p0, st)
+        v_env = tf.Variable(v_env)
+        v_lfo = tf.Variable(v_lfo)
+        w = st[:, 0]
+        opt_t = tf.keras.optimizers.Adam(lr)
+
+        @tf.function
+        def one():
+            with tf.GradientTape() as tp:
+                pp = free_to_params(v_env, v_lfo, w)
+                loss = tf.reduce_mean(tf.abs(reconstruct(pp, st) - target_traj))
+            g = tp.gradient(loss, [v_env, v_lfo])
+            opt_t.apply_gradients(zip(g, [v_env, v_lfo]))
+            return loss
+
+        for _ in range(iters):
+            one()
+        return free_to_params(v_env, v_lfo, w)
 
     @tf.function(reduce_retracing=True)
     def step(x, f0, y, t_true, p_true):
@@ -320,6 +378,7 @@ def main():
 
     # --- 評価 ---
     ok_s1, ok_final, mae_s1, mae_final, tacc = [], [], [], [], []
+    ok_tto, mae_tto = [], []
     for _ in range(12):
         x, f0, y, tt, pt = batch()
         yn = y.numpy()
@@ -339,6 +398,9 @@ def main():
                     inp_e = traj
                 p, st, tl = s2(inp_e)
                 rec = reconstruct(p, st).numpy()
+                if args.tto > 0:
+                    p2 = test_time_opt(p, st, inp_e, args.tto, args.tto_lr)
+                    rec_t = reconstruct(p2, st).numpy()
             else:
                 rec, tl = None, None
         t1 = np.abs(traj.numpy() - yn).mean(1)
@@ -347,6 +409,9 @@ def main():
             t2 = np.abs(rec - yn).mean(1)
             mae_final += list(t2); ok_final += list(t2 <= 0.1)
             tacc += list((tf.argmax(tl, -1).numpy() == (1 - tt.numpy())).astype(float))
+            if args.tto > 0:
+                t3 = np.abs(rec_t - yn).mean(1)
+                mae_tto += list(t3); ok_tto += list(t3 <= 0.1)
 
     print(f"\n== mode={args.mode} target={tname} n_mod={args.n_mod} "
           f"detach={args.detach} ==")
@@ -356,6 +421,12 @@ def main():
               f"MAE = {np.mean(mae_final):.4f}")
         print(f"  type_acc = {np.mean(tacc):.3f}")
         print(f"  段間の損失 = {np.mean(ok_s1) - np.mean(ok_final):+.3f}")
+        if ok_tto:
+            print(f"  ★ 推論時最適化後（{args.tto} 反復） shape_ok = {np.mean(ok_tto):.3f}  "
+                  f"MAE = {np.mean(mae_tto):.4f}")
+            print(f"     改善 = {np.mean(ok_tto) - np.mean(ok_final):+.3f}  "
+                  f"（Stage1 {np.mean(ok_s1):.3f} に対する残差 "
+                  f"{np.mean(ok_s1) - np.mean(ok_tto):+.3f}）")
     print("\n  参照値: free 0.729 / 単段 param 0.099 / 二段 baseline 0.359")
     if args.s2_input == "true":
         print("  読み: これは Stage2 の**上限**（入力が完璧な場合）。")
