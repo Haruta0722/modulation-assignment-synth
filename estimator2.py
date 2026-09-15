@@ -76,7 +76,7 @@ class Stage2Param(tf.keras.Model):
         self.h_lfo = tf.keras.layers.Dense(4)
         self.h_type = tf.keras.layers.Dense(2)
 
-    def call(self, traj, temp=1.0, hard=True):
+    def call(self, traj, temp=1.0, hard=True, noise=True):
         """traj: [B,K,T] → params [B,K,5], type_logits [B,K,2], type_oh [B,K,2]"""
         B, Ks, T = tf.shape(traj)[0], traj.shape[1], tf.shape(traj)[2]
         flat = tf.reshape(traj, [-1, T, 1])                  # [B*K,T,1]
@@ -97,7 +97,7 @@ class Stage2Param(tf.keras.Model):
         p_lfo = tf.stack([rate, phase, tf.sigmoid(ul[:, 3]), z, z], -1)
 
         tl = self.h_type(g)                                   # [B*K,2] class0=ENV
-        t_oh = gumbel_st(tl, temp, hard)
+        t_oh = gumbel_st(tl, temp, hard, noise)
         w = t_oh[:, 0:1]
         p = w[..., None] * p_env[:, None] + (1 - w[..., None]) * p_lfo[:, None]
         p = p[:, 0]                                           # [B*K,5]
@@ -146,16 +146,16 @@ class TwoStageEstimator(tf.keras.Model):
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)
         return self.trunk(tf.concat([h, f0n], -1))
 
-    def call(self, x, f0, temp=1.0, hard=True):
+    def call(self, x, f0, temp=1.0, hard=True, noise=True):
         B = tf.shape(x)[0]
         # --- 二段: 軌跡 → パラメータ ---
         traj = self.stage1(x, f0)                             # [B,K,T]
         src_params, type_logits, type_oh = self.stage2(
-            traj, temp=temp, hard=hard)
+            traj, temp=temp, hard=hard, noise=noise)
         # --- 従来どおりのヘッド ---
         h = self.encode(x, f0)
         gate_logits = tf.reshape(self.h_gate(h), [B, M, K + 1])
-        gate_oh = gumbel_st(gate_logits, temp, hard)
+        gate_oh = gumbel_st(gate_logits, temp, hard, noise)
         depth = tf.tanh(self.h_depth(h))
         R_hat = tf.transpose(gate_oh[..., :K], [0, 2, 1]) * depth[:, None, :]
         us = tf.sigmoid(self.h_stat(h))

@@ -34,9 +34,18 @@ R_MAX = 0.6                                                       # release deno
 F0_LO = 65.4                                                      # MIDI36
 
 
-def gumbel_st(logits, temp=1.0, hard=True):
-    """straight-through Gumbel-Softmax（forward one-hot / backward soft）"""
-    g = -tf.math.log(-tf.math.log(tf.random.uniform(tf.shape(logits), 1e-9, 1.0)))
+def gumbel_st(logits, temp=1.0, hard=True, noise=True):
+    """straight-through Gumbel-Softmax（forward one-hot / backward soft）
+
+    noise=False で Gumbel ノイズを加えない = 決定的な最尤選択。
+    **推論・評価時は必ず noise=False を用いる**。ノイズを残すと
+    「分布からのサンプリング」になり、最尤の予測にならない
+    （ノイズのスケールは温度に依存しないため temp を下げても消えない）。"""
+    if noise:
+        g = -tf.math.log(-tf.math.log(
+            tf.random.uniform(tf.shape(logits), 1e-9, 1.0)))
+    else:
+        g = tf.zeros_like(logits)
     y = tf.nn.softmax((logits + g) / temp, axis=-1)
     if hard:
         y_h = tf.one_hot(tf.argmax(y, axis=-1), tf.shape(logits)[-1], dtype=y.dtype)
@@ -89,7 +98,7 @@ class Estimator(tf.keras.Model):
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
         return self.trunk(tf.concat([h, f0n], axis=-1))
 
-    def call(self, x, f0, temp=1.0, hard=True):
+    def call(self, x, f0, temp=1.0, hard=True, noise=True):
         B = tf.shape(x)[0]
         h = self.encode(x, f0)
         # --- ENV（割合パラメータ化） ---
@@ -109,12 +118,12 @@ class Estimator(tf.keras.Model):
         p_lfo = tf.stack([rate, phase, morph, zeros, zeros], axis=-1)
         # --- タイプ（ST-Gumbel: forward one-hot → パラメータ選択が厳密） ---
         type_logits = tf.reshape(self.h_type(h), [B, K, 2])           # class0=ENV
-        type_oh = gumbel_st(type_logits, temp, hard)
+        type_oh = gumbel_st(type_logits, temp, hard, noise)
         w_env = type_oh[..., 0]                                       # [B,K]
         src_params = w_env[..., None] * p_env + (1 - w_env[..., None]) * p_lfo
         # --- ゲート・深さ ---
         gate_logits = tf.reshape(self.h_gate(h), [B, M, K + 1])
-        gate_oh = gumbel_st(gate_logits, temp, hard)                  # [B,M,K+1]
+        gate_oh = gumbel_st(gate_logits, temp, hard, noise)           # [B,M,K+1]
         depth = tf.tanh(self.h_depth(h))                              # [B,M]
         R_hat = tf.transpose(gate_oh[..., :K], [0, 2, 1]) * depth[:, None, :]  # [B,K,M]
         # --- θ_stat（fin 正準順序を構造保証） ---

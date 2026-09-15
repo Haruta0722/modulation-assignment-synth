@@ -104,7 +104,7 @@ def main():
             if len(idx) < args.batch:
                 idx = np.concatenate([idx, idx_all[:args.batch - len(idx)]])
             x, batch = data.batch(idx)
-            pred = model(x, batch["f0"], temp=0.3, hard=True)
+            pred = model(x, batch["f0"], temp=0.3, hard=True, noise=False)
             total, parts, mapping = E2.losses2(pred, batch, x, SR, T_OFF, NH,
                                                LAM, args.hop)
             m = T1.metrics_np(pred, batch, mapping, SR, T_OFF, N)

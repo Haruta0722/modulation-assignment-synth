@@ -346,7 +346,8 @@ def main():
             if len(idx) < args.batch:
                 idx = np.concatenate([idx, idx_all[:args.batch - len(idx)]])
             x, batch = data.batch(idx)
-            pred = model(x, batch["f0"], temp=args.temp_lo, hard=True)
+            pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
+                         noise=False)   # 評価は決定的に
             total, parts, mapping = E.losses(pred, batch, x, SR, T_OFF, NH, LAM)
             m = metrics_np(pred, batch, mapping, SR, T_OFF, N)
             m["loss"] = float(total)
