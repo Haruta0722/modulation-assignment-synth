@@ -12,10 +12,21 @@ r"""analyze_dump.py — eval_dump.py が保存した .npz から指標を計算�
   F. 2 つ渡したとき: 共通ヒット集合での比較
 """
 import argparse
+from itertools import permutations
+
 import numpy as np
-from scipy.optimize import linear_sum_assignment
 
 K, M = 4, 17
+
+
+def linear_sum_assignment(cost):
+    """scipy と同じ返り値（行は昇順）の総当たり版。K=4 なので高々 24 通り"""
+    n_r, n_c = cost.shape
+    cols = np.arange(n_c)
+    best = min(permutations(range(n_r), n_c), key=lambda p: cost[list(p), cols].sum())
+    rows = np.array(best)
+    o = np.argsort(rows)
+    return rows[o], cols[o]
 CORE8 = [0, 1, 2, 3, 4, 7, 8, 10]          # well-conditioned
 CLUSTER = [10, 11, 15, 16]                  # degenerate
 WEAK = [5, 6, 9, 12, 13, 14]

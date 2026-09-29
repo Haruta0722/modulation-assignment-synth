@@ -12,6 +12,8 @@ r"""eval_dump.py — 評価に必要な配列を .npz に保存する（指標�
   z_true      [B,M]    真の割り当て（0..K-1、未割り当ては -1）
   z_pred      [B,M]    ゲートの arg-max（K は未割り当て）
   gate_margin [B,M]    ゲートの「1位のソース」と「∅」のロジット差（正なら割り当て側）
+  z_src       [B,M]    ∅ を除いた 1 位のソース（しきい値を下げたときの割り当て先）
+  depth_raw   [B,M]    ゲートを掛ける前の深さ（tanh 出力）
   d_true      [B,M]    列ごとの真の深さ（R の列和）
   d_pred      [B,M]    同じく予測
   e_true      [B,K,T]  真のソース信号（評価フレーム上）
@@ -83,7 +85,8 @@ def main():
     idx_all = data.splits[args.split]
     if args.n:
         idx_all = idx_all[:args.n]
-    acc = {k: [] for k in ("idx", "z_true", "z_pred", "gate_margin", "d_true", "d_pred",
+    acc = {k: [] for k in ("idx", "z_true", "z_pred", "gate_margin", "z_src", "depth_raw",
+                           "d_true", "d_pred",
                            "e_true", "e_param", "traj", "type_true", "type_pred",
                            "stat_true", "stat_pred", "used", "f0")}
 
@@ -97,6 +100,8 @@ def main():
                            output_type=tf.int32).numpy()              # [B,M]
         gl = pred["gate_logits"].numpy()                              # [B,M,K+1]
         margin = np.max(gl[..., :K], axis=-1) - gl[..., K]             # [B,M]
+        z_src = np.argmax(gl[..., :K], axis=-1)                       # ∅ を除いた 1 位
+        depth_raw = pred["depth"].numpy()                             # ゲート前の深さ
         R_true = batch["R"].numpy().sum(axis=1)                       # [B,M]
         R_pred = pred["R"].numpy().sum(axis=1)                        # [B,M]
 
@@ -113,7 +118,7 @@ def main():
         used = (z[:, :, None] == np.arange(K)[None, None, :]).any(axis=1)
 
         for k, v in (("idx", np.asarray(idx)), ("z_true", z), ("z_pred", g_pred),
-                     ("gate_margin", margin),
+                     ("gate_margin", margin), ("z_src", z_src), ("depth_raw", depth_raw),
                      ("d_true", R_true), ("d_pred", R_pred),
                      ("e_true", e_true), ("e_param", e_param), ("traj", traj),
                      ("type_true", t_true), ("type_pred", t_pred),
