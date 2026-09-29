@@ -322,6 +322,8 @@ def main():
     mgr = tf.train.CheckpointManager(ckpt, args.ckpt_dir, max_to_keep=3)
     if mgr.latest_checkpoint:
         ckpt.restore(mgr.latest_checkpoint)
+        w = model.h_gate.kernel.numpy()
+        print("gate kernel checksum:", float(w.sum()), float(np.abs(w).sum()))
         print(f"resumed from {mgr.latest_checkpoint} (step {int(step_var)})")
 
     def temp_at(step):
@@ -357,6 +359,9 @@ def main():
             pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
                          noise=False)   # 評価は決定的に
             total, parts, mapping = E.losses(pred, batch, x, SR, T_OFF, NH, LAM, matching=False)
+            if s0 == 0:
+                gl = pred["gate_logits"].numpy()
+                print("gate_logits checksum:", float(gl.sum()), float(np.abs(gl).sum()))
             m = metrics_np(pred, batch, mapping, SR, T_OFF, N)
             m["loss"] = float(total)
             m["spec"] = float(parts["spec"])
