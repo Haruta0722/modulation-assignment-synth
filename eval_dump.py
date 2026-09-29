@@ -11,6 +11,7 @@ r"""eval_dump.py — 評価に必要な配列を .npz に保存する（指標�
   idx         [B]      データセット内の通し番号（2つのモデルを突き合わせる鍵）
   z_true      [B,M]    真の割り当て（0..K-1、未割り当ては -1）
   z_pred      [B,M]    ゲートの arg-max（K は未割り当て）
+  gate_margin [B,M]    ゲートの「1位のソース」と「∅」のロジット差（正なら割り当て側）
   d_true      [B,M]    列ごとの真の深さ（R の列和）
   d_pred      [B,M]    同じく予測
   e_true      [B,K,T]  真のソース信号（評価フレーム上）
@@ -24,8 +25,16 @@ r"""eval_dump.py — 評価に必要な配列を .npz に保存する（指標�
   f0          [B]
 """
 import argparse, os
+
+# --- 決定性の設定: tensorflow を import する前に環境変数を立てる必要がある ---
+os.environ["TF_DETERMINISTIC_OPS"] = "1"
+os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+
 import numpy as np
 import tensorflow as tf
+
+tf.config.experimental.enable_op_determinism()
+tf.random.set_seed(0)
 
 import diff_synth_tf as ds
 import estimator as E
@@ -79,7 +88,7 @@ def main():
     idx_all = data.splits[args.split]
     if args.n:
         idx_all = idx_all[:args.n]
-    acc = {k: [] for k in ("idx", "z_true", "z_pred", "d_true", "d_pred",
+    acc = {k: [] for k in ("idx", "z_true", "z_pred", "gate_margin", "d_true", "d_pred",
                            "e_true", "e_param", "traj", "type_true", "type_pred",
                            "stat_true", "stat_pred", "used", "f0")}
 
@@ -91,6 +100,8 @@ def main():
         z = batch["z"].numpy()                                        # [B,M]
         g_pred = tf.argmax(pred["gate_logits"], -1,
                            output_type=tf.int32).numpy()              # [B,M]
+        gl = pred["gate_logits"].numpy()                              # [B,M,K+1]
+        margin = np.max(gl[..., :K], axis=-1) - gl[..., K]             # [B,M]
         R_true = batch["R"].numpy().sum(axis=1)                       # [B,M]
         R_pred = pred["R"].numpy().sum(axis=1)                        # [B,M]
 
@@ -107,6 +118,7 @@ def main():
         used = (z[:, :, None] == np.arange(K)[None, None, :]).any(axis=1)
 
         for k, v in (("idx", np.asarray(idx)), ("z_true", z), ("z_pred", g_pred),
+                     ("gate_margin", margin),
                      ("d_true", R_true), ("d_pred", R_pred),
                      ("e_true", e_true), ("e_param", e_param), ("traj", traj),
                      ("type_true", t_true), ("type_pred", t_pred),

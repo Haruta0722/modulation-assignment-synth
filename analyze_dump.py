@@ -34,6 +34,7 @@ class Dump:
         self.e_true, self.e_param, self.traj = d["e_true"], d["e_param"], d["traj"]
         self.type_true, self.type_pred = d["type_true"], d["type_pred"]
         self.used = d["used"]
+        self.margin = d["gate_margin"] if "gate_margin" in d else None
         self.B = len(self.idx)
         self.true_on = self.z_true >= 0
         self.pred_on = self.z_pred < K
@@ -194,13 +195,29 @@ def common(A, B_):
         print(f"    分位点(50/75/90)  shape {q(sh)}   depth {q(dp)}")
 
 
+def gate_margin(D):
+    """ゲートが ∅ とどれだけ拮抗しているか。拮抗が多いほど実行ごとに n_pred が揺れる。"""
+    if D.margin is None:
+        return
+    mg = D.margin.ravel()
+    print(f"\n[G] ゲートの余裕（1位のソース − ∅ のロジット差）  ({D.path})")
+    print(f"    割り当て側（margin > 0）の列 {100*(mg>0).mean():.1f}%  "
+          f"→ n_pred {D.pred_on.sum(1).mean():.3f}")
+    for eps in (0.05, 0.1, 0.25, 0.5, 1.0):
+        print(f"    |margin| < {eps:<4} の拮抗列 {100*(np.abs(mg)<eps).mean():5.2f}%  "
+          f"（全 {len(mg)} 列中 {int((np.abs(mg)<eps).sum())} 列）")
+    q = " / ".join(f"{v:+.2f}" for v in np.percentile(mg, [10, 50, 90]))
+    print(f"    margin の分位点(10/50/90) {q}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dumps", nargs="+")
     args = ap.parse_args()
     ds = [Dump(p) for p in args.dumps]
     for D in ds:
-        basic_metrics(D); distribution(D); product_error(D); ordering(D); shrinkage(D)
+        basic_metrics(D); distribution(D); product_error(D); ordering(D)
+        shrinkage(D); gate_margin(D)
     if len(ds) == 2:
         common(ds[0], ds[1])
 

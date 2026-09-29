@@ -29,6 +29,10 @@ import tensorflow as tf
 import diff_synth_tf as ds
 import estimator as E
 
+import tensorflow as tf
+tf.config.experimental.enable_op_determinism()
+tf.random.set_seed(0)
+
 K, M = ds.K_ENVS, ds.M_DEST
 CORE8 = [0, 1, 2, 3, 4, 7, 8, 10]
 CLUSTER = [10, 11, 15, 16]          # thresh, ratio, drive_d, mix_d（thresh は二重役割）
