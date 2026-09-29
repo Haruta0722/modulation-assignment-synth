@@ -24,6 +24,7 @@ import diff_synth_tf as ds
 import estimator as E
 import estimator2 as E2
 import train as T1          # Data クラスと metrics_np を再利用
+import weights_io as W
 
 K, M = ds.K_ENVS, ds.M_DEST
 LAM = dict(spec=1.0, param=0.2, assign=3.0, sparse=0.0,
@@ -78,18 +79,22 @@ def main():
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)
     step_var = tf.Variable(0, dtype=tf.int64)
-    ckpt = tf.train.Checkpoint(model=model, opt=opt, step=step_var)
+    # 重みの正本は weights_io（.weights.h5）。tf.train.Checkpoint は opt と step の再開用
+    ckpt = tf.train.Checkpoint(opt=opt, step=step_var)
     mgr = tf.train.CheckpointManager(ckpt, args.ckpt_dir, max_to_keep=3)
-    # 最良の検証性能のチェックポイントを別に保持する
-    best_mgr = tf.train.CheckpointManager(
-        ckpt, os.path.join(args.ckpt_dir, "best"), max_to_keep=1)
-    best_score = -1.0
     best_dir = os.path.join(args.ckpt_dir, "best")
-    if args.eval_only and tf.train.latest_checkpoint(best_dir):
-        ckpt.restore(tf.train.latest_checkpoint(best_dir)).expect_partial()
-        print(f"restored BEST checkpoint from {best_dir} (step {int(step_var)})")
+    best_mgr = tf.train.CheckpointManager(ckpt, best_dir, max_to_keep=1)
+    best_score = -1.0
+
+    def save_to(m):
+        W.save(model, W.ckpt_weights_path(m.save()))
+        W.prune(m)
+
+    if args.eval_only:
+        W.load(model, W.latest(args.ckpt_dir))
     elif mgr.latest_checkpoint:
         ckpt.restore(mgr.latest_checkpoint).expect_partial()
+        W.load(model, W.ckpt_weights_path(mgr.latest_checkpoint))
         print(f"resumed from {mgr.latest_checkpoint} (step {int(step_var)})")
 
     def temp_at(step):
@@ -122,8 +127,6 @@ def main():
         agg, nb = None, 0
         for s0 in range(0, len(idx_all), args.batch):
             idx = idx_all[s0:s0 + args.batch]
-            if len(idx) < args.batch:
-                idx = np.concatenate([idx, idx_all[:args.batch - len(idx)]])
             x, batch = data.batch(idx)
             pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
                          noise=False)   # 評価は決定的に
@@ -187,19 +190,19 @@ def main():
             score = val["F1"] + val["desc_rec_rate"]
             if score > best_score:
                 best_score = score
-                best_mgr.save()
+                save_to(best_mgr)
                 print(f"    best updated: F1={val['F1']:.3f} "
                       f"desc={val['desc_rec_rate']:.4f} → {args.ckpt_dir}/best",
                       flush=True)
         if step > 0 and step % args.ckpt_every == 0:
-            mgr.save()
+            save_to(mgr)
         logw.writerow([step, f"{temp:.3f}", f"{float(total):.4f}"]
                       + [f"{float(parts[k]):.4f}" for k in
                          ("traj", "param", "gate", "type")]
                       + [f"{val.get('F1', ''):}", f"{val.get('desc_rec_rate', ''):}",
                          f"{val.get('traj_shape_ok', ''):}"])
         logf.flush()
-    mgr.save()
+    save_to(mgr)
     print("training complete")
 
 

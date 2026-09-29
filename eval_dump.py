@@ -40,6 +40,7 @@ import diff_synth_tf as ds
 import estimator as E
 import estimator2 as E2
 import train as T1
+import weights_io as W
 
 K, M = ds.K_ENVS, ds.M_DEST
 
@@ -77,13 +78,7 @@ def main():
         model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch)
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
 
-    ckpt = tf.train.Checkpoint(model=model)
-    best = os.path.join(args.ckpt_dir, "best")
-    path = tf.train.latest_checkpoint(best) or tf.train.latest_checkpoint(args.ckpt_dir)
-    if path is None:
-        raise SystemExit(f"チェックポイントが見つかりません: {args.ckpt_dir}")
-    ckpt.restore(path).expect_partial()
-    print(f"restored {path}")
+    W.load(model, W.latest(args.ckpt_dir))
 
     idx_all = data.splits[args.split]
     if args.n:

@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import diff_synth_tf as ds
 import estimator as E
 import train as T
+import weights_io as W
 
 K, M = ds.K_ENVS, ds.M_DEST
 P = 108
@@ -143,8 +144,7 @@ def main():
     data = T.Data(args.data)
     model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch)
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
-    ck = tf.train.Checkpoint(model=model)
-    st = ck.restore(tf.train.latest_checkpoint(args.ckpt_dir)).expect_partial()
+    W.load(model, W.latest(args.ckpt_dir))
     fmax = E.F0_LO * 2 ** (100 / 1200)
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
     LAM = dict(spec=0.0, param=0.0, assign=1.0, sparse=0.0, none_w=1.0)

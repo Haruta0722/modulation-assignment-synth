@@ -32,8 +32,8 @@ import tensorflow as tf
 
 import diff_synth_tf as ds
 import estimator as E
+import weights_io as W
 
-import tensorflow as tf
 tf.config.experimental.enable_op_determinism()
 tf.random.set_seed(0)
 
@@ -318,15 +318,22 @@ def main():
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)
     step_var = tf.Variable(0, dtype=tf.int64)
-    ckpt = tf.train.Checkpoint(model=model, opt=opt, step=step_var)
+    # 重みの正本は weights_io（.weights.h5）。tf.train.Checkpoint は opt と step の再開用
+    ckpt = tf.train.Checkpoint(opt=opt, step=step_var)
     mgr = tf.train.CheckpointManager(ckpt, args.ckpt_dir, max_to_keep=3)
-    if mgr.latest_checkpoint:
-        status = ckpt.restore(mgr.latest_checkpoint)
-        status.assert_existing_objects_matched()
-        w = model.h_gate.kernel.numpy()
-        print("restored:", mgr.latest_checkpoint, "gate_sum:", float(w.sum()))
-        w = model.h_gate.kernel.numpy()
-        print("gate kernel checksum:", float(w.sum()), float(np.abs(w).sum()))
+    best_dir = os.path.join(args.ckpt_dir, "best")
+    best_mgr = tf.train.CheckpointManager(ckpt, best_dir, max_to_keep=1)
+    best_score = -1.0
+
+    def save_to(m):
+        W.save(model, W.ckpt_weights_path(m.save()))
+        W.prune(m)
+
+    if args.eval_only:
+        W.load(model, W.latest(args.ckpt_dir))
+    elif mgr.latest_checkpoint:
+        ckpt.restore(mgr.latest_checkpoint).expect_partial()
+        W.load(model, W.ckpt_weights_path(mgr.latest_checkpoint))
         print(f"resumed from {mgr.latest_checkpoint} (step {int(step_var)})")
 
     def temp_at(step):
@@ -360,9 +367,6 @@ def main():
             pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
                          noise=False)   # 評価は決定的に
             total, parts, mapping = E.losses(pred, batch, x, SR, T_OFF, NH, LAM, matching=False)
-            if s0 == 0:
-                gl = pred["gate_logits"].numpy()
-                print("gate_logits checksum:", float(gl.sum()), float(np.abs(gl).sum()))
             m = metrics_np(pred, batch, mapping, SR, T_OFF, N)
             m["loss"] = float(total)
             m["spec"] = float(parts["spec"])
@@ -418,15 +422,21 @@ def main():
                   f"FPrate={val['FP_rate']:.3f} depthMAE={val['depth_mae']:.3f} "
                   f"srcMAE={val['src_mae']:.3f} typeAcc={val['type_acc']:.3f} "
                   f"spec={val['spec']:.3f}", flush=True)
+            score = val["F1"] + val["desc_rec_rate"]
+            if score > best_score:
+                best_score = score
+                save_to(best_mgr)
+                print(f"    best updated: F1={val['F1']:.3f} "
+                      f"desc={val['desc_rec_rate']:.4f} → {best_dir}", flush=True)
         if step > 0 and step % args.ckpt_every == 0:
-            mgr.save()
+            save_to(mgr)
         logw.writerow([step, f"{temp:.3f}", f"{float(total):.4f}"]
                       + [f"{float(parts[k]):.4f}" for k in
                          ("spec", "param", "gate", "type", "sparse")]
                       + [f"{val.get('F1', ''):}", f"{val.get('type_acc', ''):}",
                          f"{val.get('spec', ''):}"])
         logf.flush()
-    mgr.save()
+    save_to(mgr)
     print("training complete")
 
 
