@@ -321,7 +321,10 @@ def main():
     ckpt = tf.train.Checkpoint(model=model, opt=opt, step=step_var)
     mgr = tf.train.CheckpointManager(ckpt, args.ckpt_dir, max_to_keep=3)
     if mgr.latest_checkpoint:
-        ckpt.restore(mgr.latest_checkpoint)
+        status = ckpt.restore(mgr.latest_checkpoint)
+        status.assert_existing_objects_matched()
+        w = model.h_gate.kernel.numpy()
+        print("restored:", mgr.latest_checkpoint, "gate_sum:", float(w.sum()))
         w = model.h_gate.kernel.numpy()
         print("gate kernel checksum:", float(w.sum()), float(np.abs(w).sum()))
         print(f"resumed from {mgr.latest_checkpoint} (step {int(step_var)})")
@@ -353,8 +356,6 @@ def main():
         agg, losses_sum, nb = None, None, 0
         for s0 in range(0, len(idx_all), args.batch):
             idx = idx_all[s0:s0 + args.batch]
-            if len(idx) < args.batch:
-                idx = np.concatenate([idx, idx_all[:args.batch - len(idx)]])
             x, batch = data.batch(idx)
             pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
                          noise=False)   # 評価は決定的に
