@@ -348,7 +348,7 @@ def main():
             x, batch = data.batch(idx)
             pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
                          noise=False)   # 評価は決定的に
-            total, parts, mapping = E.losses(pred, batch, x, SR, T_OFF, NH, LAM)
+            total, parts, mapping = E.losses(pred, batch, x, SR, T_OFF, NH, LAM, matching=False)
             m = metrics_np(pred, batch, mapping, SR, T_OFF, N)
             m["loss"] = float(total)
             m["spec"] = float(parts["spec"])
