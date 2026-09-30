@@ -32,7 +32,7 @@ import tensorflow as tf
 import diff_synth_tf as ds
 from diff_synth_fast import synth_fast
 from estimator import (K, M, PERMS, R_MAX, F0_LO, gumbel_st,
-                       gather_rows, SLOT_SCALE_ENV, teacher_R)
+                       gather_rows, SLOT_SCALE_ENV, teacher_R, none_depth_loss)
 
 
 class Stage1Traj(tf.keras.Model):
@@ -212,6 +212,8 @@ def losses2(pred, batch, x_true, sr, t_off, n_harm, lam, hop=256):
     R_hat = (teacher_R(pred["depth"], batch["z"]) if lam.get("depth_tf", 0)
              else pred["R"])
     l_R = tf.reduce_mean(tf.reduce_sum((R_hat - true_R) ** 2, [1, 2]))
+    if lam.get("depth_none0", 0):
+        l_R += none_depth_loss(pred["depth"], batch["z"])
     l_param = l_stat + l_static + l_R + l_src
 
     # ---- ゲート・型 CE（正準順序のため恒等対応） ----

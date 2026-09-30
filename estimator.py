@@ -164,6 +164,12 @@ def teacher_R(depth, z):
     return tf.transpose(oh, [0, 2, 1]) * depth[:, None, :]            # [B,K,M]
 
 
+def none_depth_loss(depth, z):
+    """真が ∅ の列で深さを 0 に教える項（teacher_R ではその列に勾配が流れないため）"""
+    off = tf.cast(tf.less(tf.cast(z, tf.int32), 0), tf.float32)       # [B,M]
+    return tf.reduce_mean(tf.reduce_sum(off * depth ** 2, -1))
+
+
 def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     # v8.3: used[B,K]=そのソースがどこかに配線されているか（聞こえるか）
     f0, true_R = batch["f0"], batch["R"]
@@ -194,6 +200,8 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
         + (1.0 if md is None else float(md[19])) * (pred["gmk"] - batch["gmk"]) ** 2)
     wR = 1.0 if md is None else tf.reshape(tf.constant(md[40:108], tf.float32), [K, M])
     l_R = tf.reduce_mean(tf.reduce_sum(wR * (R_hat - true_R) ** 2, [1, 2]))
+    if lam.get("depth_none0", 0):
+        l_R += none_depth_loss(pred["depth"], batch["z"])
     z_all = tf.cast(batch["z"], tf.int32)                             # [B,M]
     used = tf.reduce_any(tf.equal(z_all[:, :, None],
                                   tf.range(K, dtype=tf.int32)[None, None, :]),
