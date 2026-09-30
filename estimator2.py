@@ -32,7 +32,7 @@ import tensorflow as tf
 import diff_synth_tf as ds
 from diff_synth_fast import synth_fast
 from estimator import (K, M, PERMS, R_MAX, F0_LO, gumbel_st,
-                       gather_rows, SLOT_SCALE_ENV)
+                       gather_rows, SLOT_SCALE_ENV, teacher_R)
 
 
 class Stage1Traj(tf.keras.Model):
@@ -209,7 +209,9 @@ def losses2(pred, batch, x_true, sr, t_off, n_harm, lam, hop=256):
     l_static = tf.reduce_mean(tf.reduce_sum(
         (pred["theta_osc"] - batch["theta_osc"]) ** 2, -1)
         + (pred["gmk"] - batch["gmk"]) ** 2)
-    l_R = tf.reduce_mean(tf.reduce_sum((pred["R"] - true_R) ** 2, [1, 2]))
+    R_hat = (teacher_R(pred["depth"], batch["z"]) if lam.get("depth_tf", 0)
+             else pred["R"])
+    l_R = tf.reduce_mean(tf.reduce_sum((R_hat - true_R) ** 2, [1, 2]))
     l_param = l_stat + l_static + l_R + l_src
 
     # ---- ゲート・型 CE（正準順序のため恒等対応） ----

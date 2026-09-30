@@ -74,6 +74,8 @@ def parse_args():
                     help="λ_spec を上書き（-1 で LAM の既定値 1.0 を使用）")
     ap.add_argument("--none_w", type=float, default=0.25,
                     help="ゲート CE における ∅ クラスの重み（1.0=従来）")
+    ap.add_argument("--depth_tf", action="store_true",
+                    help="深さを真の割り当て位置で教える（ゲートの外れで深さが 0 に引かれるのを防ぐ）")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -298,6 +300,7 @@ def main():
         tf.config.experimental.set_memory_growth(g, True)
 
     LAM["none_w"] = args.none_w
+    LAM["depth_tf"] = float(args.depth_tf)
     if args.mdiag:
         _d = np.load(args.mdiag)["d_mean"].astype(np.float32)
         _d = np.maximum(_d, 1e-8) ** args.mdiag_pow

@@ -53,6 +53,8 @@ def parse_args():
     ap.add_argument("--eval_only", action="store_true")
     ap.add_argument("--split", type=str, default="test",
                     choices=["train", "val", "test"])
+    ap.add_argument("--depth_tf", action="store_true",
+                    help="深さを真の割り当て位置で教える（ゲートの外れで深さが 0 に引かれるのを防ぐ）")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -66,6 +68,7 @@ def main():
     LAM["traj"] = args.traj_w
     LAM["none_w"] = args.none_w
     LAM["spec"] = args.spec_w
+    LAM["depth_tf"] = float(args.depth_tf)
     print(f"LAM = {LAM}")
 
     data = T1.Data(args.data)

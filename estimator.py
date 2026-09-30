@@ -157,6 +157,13 @@ def gather_rows(t, mapping):
 SLOT_SCALE_ENV = tf.constant([1.0, 1.0, 1.0, 1.0, R_MAX])            # a,h,d[s], s, r
 
 
+def teacher_R(depth, z):
+    """深さを真の割り当て z（-1=∅）の位置に置いた R。深さの教師をゲートの当たり外れから切り離す。
+    予測 R（ゲート×深さ）で教えると、ゲートが外れた学習例で深さが 0 に引かれ、p(正解)·d に縮む"""
+    oh = tf.one_hot(tf.cast(z, tf.int32), K)                          # [B,M,K]、-1 は全 0
+    return tf.transpose(oh, [0, 2, 1]) * depth[:, None, :]            # [B,K,M]
+
+
 def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     # v8.3: used[B,K]=そのソースがどこかに配線されているか（聞こえるか）
     f0, true_R = batch["f0"], batch["R"]
@@ -169,7 +176,8 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
 
     src_p = gather_rows(pred["src_params"], mapping)                  # [B,K,5]
     type_lg = gather_rows(pred["type_logits"], mapping)
-    R_hat = gather_rows(pred["R"], mapping)
+    R_hat = (teacher_R(pred["depth"], batch["z"]) if lam.get("depth_tf", 0)
+             else gather_rows(pred["R"], mapping))
 
     # --- param 損失: λI 版（等方 L2）／対角知覚計量版（v8.8）を lam["mdiag"] で切替 ---
     # mdiag: [P] の知覚感度ベクトル（precompute_Mdiag.py の d_mean）。None なら等方。
