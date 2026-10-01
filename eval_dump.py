@@ -21,6 +21,8 @@ r"""eval_dump.py — 評価に必要な配列を .npz に保存する（指標�
   traj        [B,K,T]  Stage 1 の生の軌跡（single では全て 0）
   type_true   [B,K]    1 = ENV, 0 = LFO
   type_pred   [B,K]
+  sp_true     [B,K,5]  真のソースパラメータ（ENV: a,h,d,s,r / LFO: rate,phase,morph,0,0）
+  sp_pred     [B,K,5]  予測のソースパラメータ（予測の型に応じて ENV / LFO の解釈）
   stat_true   [B,M]    静的値 θ_stat
   stat_pred   [B,M]
   used        [B,K]    そのソースがどこかの列で使われているか
@@ -88,6 +90,7 @@ def main():
     acc = {k: [] for k in ("idx", "z_true", "z_pred", "gate_margin", "z_src", "depth_raw",
                            "d_true", "d_pred",
                            "e_true", "e_param", "traj", "type_true", "type_pred",
+                           "sp_true", "sp_pred",
                            "stat_true", "stat_pred", "used", "f0")}
 
     for s0 in range(0, len(idx_all), args.batch):
@@ -122,6 +125,8 @@ def main():
                      ("d_true", R_true), ("d_pred", R_pred),
                      ("e_true", e_true), ("e_param", e_param), ("traj", traj),
                      ("type_true", t_true), ("type_pred", t_pred),
+                     ("sp_true", batch["src_params"].numpy()),
+                     ("sp_pred", pred["src_params"].numpy()),
                      ("stat_true", batch["theta_stat"].numpy()),
                      ("stat_pred", pred["theta_stat"].numpy()),
                      ("used", used), ("f0", batch["f0"].numpy())):
