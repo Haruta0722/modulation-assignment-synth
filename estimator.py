@@ -219,7 +219,7 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     d_lfo = (wS[:, 0] * lr_n ** 2 + wS[:, 1] * circ ** 2
              + wS[:, 2] * (src_p[..., 2] - batch["src_params"][..., 2]) ** 2)
     l_src = tf.reduce_sum(uf * (is_env * d_env + (1 - is_env) * d_lfo)) / nu
-    l_param = l_stat + l_static + l_R + l_src
+    l_param = l_stat + l_static + l_R + lam.get("src_w", 1.0) * l_src
 
     # --- ゲート/型 CE（π* でクラス添字を揃える） ---
     gate_lg = pred["gate_logits"]                                     # [B,M,K+1]

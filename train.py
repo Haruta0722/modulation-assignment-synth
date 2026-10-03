@@ -78,6 +78,8 @@ def parse_args():
                     help="深さを真の割り当て位置で教える（ゲートの外れで深さが 0 に引かれるのを防ぐ）")
     ap.add_argument("--depth_none0", action="store_true",
                     help="真が ∅ の列で深さを 0 に教える（--depth_tf と併用）")
+    ap.add_argument("--src_w", type=float, default=1.0,
+                    help="ソースのパラメータ損失 l_src だけに掛ける追加の重み（λ_param の内側）")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -304,6 +306,7 @@ def main():
     LAM["none_w"] = args.none_w
     LAM["depth_tf"] = float(args.depth_tf)
     LAM["depth_none0"] = float(args.depth_none0)
+    LAM["src_w"] = args.src_w
     if args.mdiag:
         _d = np.load(args.mdiag)["d_mean"].astype(np.float32)
         _d = np.maximum(_d, 1e-8) ** args.mdiag_pow

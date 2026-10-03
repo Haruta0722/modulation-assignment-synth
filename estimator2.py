@@ -214,7 +214,7 @@ def losses2(pred, batch, x_true, sr, t_off, n_harm, lam, hop=256):
     l_R = tf.reduce_mean(tf.reduce_sum((R_hat - true_R) ** 2, [1, 2]))
     if lam.get("depth_none0", 0):
         l_R += none_depth_loss(pred["depth"], batch["z"])
-    l_param = l_stat + l_static + l_R + l_src
+    l_param = l_stat + l_static + l_R + lam.get("src_w", 1.0) * l_src
 
     # ---- ゲート・型 CE（正準順序のため恒等対応） ----
     gate_lg = pred["gate_logits"]
