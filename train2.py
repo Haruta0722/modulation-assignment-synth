@@ -59,6 +59,8 @@ def parse_args():
                     help="真が ∅ の列で深さを 0 に教える（--depth_tf と併用）")
     ap.add_argument("--src_w", type=float, default=1.0,
                     help="ソースのパラメータ損失 l_src だけに掛ける追加の重み（λ_param の内側）")
+    ap.add_argument("--env_frac", action="store_true",
+                    help="ENV のパラメータ損失を秒ではなく割合空間（出力・生成と同じ）で取る")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -75,6 +77,7 @@ def main():
     LAM["depth_tf"] = float(args.depth_tf)
     LAM["depth_none0"] = float(args.depth_none0)
     LAM["src_w"] = args.src_w
+    LAM["env_frac"] = float(args.env_frac)
     print(f"LAM = {LAM}")
 
     data = T1.Data(args.data)

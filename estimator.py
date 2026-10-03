@@ -157,6 +157,17 @@ def gather_rows(t, mapping):
 SLOT_SCALE_ENV = tf.constant([1.0, 1.0, 1.0, 1.0, R_MAX])            # a,h,d[s], s, r
 
 
+def env_frac(p, t_off):
+    """ENV の (a,h,d,s,r)[秒] → 生成・出力と同じ割合空間 (a/T, h/残り, d/残り, s, r/R_MAX)。
+    秒で比べると hold・decay は前段の誤差を引き継ぎ、尺度も小さく偏るため、割合で比べる"""
+    a, h, d, s, r = tf.unstack(p, axis=-1)
+    u0 = a / t_off
+    u1 = h / tf.maximum(t_off - a, 1e-3)
+    u2 = d / tf.maximum(t_off - a - h, 1e-3)
+    u = tf.stack([u0, u1, u2, s, r / R_MAX], axis=-1)
+    return tf.clip_by_value(u, 0.0, 2.0)                              # LFO の枠の値で発散させない
+
+
 def teacher_R(depth, z):
     """深さを真の割り当て z（-1=∅）の位置に置いた R。深さの教師をゲートの当たり外れから切り離す。
     予測 R（ゲート×深さ）で教えると、ゲートが外れた学習例で深さが 0 に引かれ、p(正解)·d に縮む"""
@@ -211,7 +222,11 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     is_env = true_type                                                # [B,K]
     wS = (tf.ones([K, 5]) if md is None
           else tf.reshape(tf.constant(md[20:40], tf.float32), [K, 5]))
-    d_env = tf.reduce_sum(wS * ((src_p - batch["src_params"]) / SLOT_SCALE_ENV) ** 2, -1)
+    if lam.get("env_frac", 0):
+        d_env = tf.reduce_sum(
+            wS * (env_frac(src_p, t_off) - env_frac(batch["src_params"], t_off)) ** 2, -1)
+    else:
+        d_env = tf.reduce_sum(wS * ((src_p - batch["src_params"]) / SLOT_SCALE_ENV) ** 2, -1)
     dphi = tf.abs(src_p[..., 1] - batch["src_params"][..., 1])
     circ = tf.minimum(dphi, 1.0 - dphi)
     lr_n = (tf.math.log(tf.maximum(src_p[..., 0], 1e-3) / 0.1)

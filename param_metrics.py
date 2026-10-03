@@ -28,6 +28,13 @@ K = A.K
 ENV_NAMES = ["attack", "hold", "decay", "sustain", "release"]
 
 
+def env_frac_np(p, t_off=1.0):
+    """estimator.env_frac と同じ割合空間（dataset_v7 は t_off = 1.0）"""
+    a, h, d = p[:, 0], p[:, 1], p[:, 2]
+    return np.stack([a / t_off, h / np.maximum(t_off - a, 1e-3),
+                     d / np.maximum(t_off - a - h, 1e-3)], 1).clip(0, 2)
+
+
 def wrap(x):
     return (x + 0.5) % 1.0 - 0.5
 
@@ -69,6 +76,10 @@ def pairs(D, match):
     for j, name in enumerate(ENV_NAMES):
         out[f"ENV {name}"] = ("lin", D.sp_true[bb[env], tt[env], j], D.sp_pred[bb[env], kk[env], j],
                               one[env])
+    # hold・decay は「残り時間に対する割合」でも測る（秒は前段の誤差を引き継ぐ）
+    ft, fp = env_frac_np(D.sp_true[bb[env], tt[env]]), env_frac_np(D.sp_pred[bb[env], kk[env]])
+    for j, name in ((1, "hold(割合)"), (2, "decay(割合)")):
+        out[f"ENV {name}"] = ("lin", ft[:, j], fp[:, j], one[env])
     for j, (name, kind) in enumerate((("rate", "log"), ("phase", "circ"), ("morph", "lin"))):
         out[f"LFO {name}"] = (kind, D.sp_true[bb[lfo], tt[lfo], j], D.sp_pred[bb[lfo], kk[lfo], j],
                               one[lfo])

@@ -32,7 +32,7 @@ import tensorflow as tf
 import diff_synth_tf as ds
 from diff_synth_fast import synth_fast
 from estimator import (K, M, PERMS, R_MAX, F0_LO, gumbel_st,
-                       gather_rows, SLOT_SCALE_ENV, teacher_R, none_depth_loss)
+                       gather_rows, SLOT_SCALE_ENV, teacher_R, none_depth_loss, env_frac)
 
 
 class Stage1Traj(tf.keras.Model):
@@ -193,8 +193,12 @@ def losses2(pred, batch, x_true, sr, t_off, n_harm, lam, hop=256):
 
     # ---- パラメータ（従来と同じ、used マスクつき） ----
     sp, tl = pred["src_params"], pred["type_logits"]
-    d_env = tf.reduce_sum(
-        (((sp - batch["src_params"]) / SLOT_SCALE_ENV) ** 2), -1)
+    if lam.get("env_frac", 0):
+        d_env = tf.reduce_sum(
+            (env_frac(sp, t_off) - env_frac(batch["src_params"], t_off)) ** 2, -1)
+    else:
+        d_env = tf.reduce_sum(
+            (((sp - batch["src_params"]) / SLOT_SCALE_ENV) ** 2), -1)
     dphi = tf.abs(sp[..., 1] - batch["src_params"][..., 1])
     circ = tf.minimum(dphi, 1.0 - dphi)
     lr_n = (tf.math.log(tf.maximum(sp[..., 0], 1e-3) / 0.1)
