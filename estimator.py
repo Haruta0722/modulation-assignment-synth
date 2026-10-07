@@ -58,14 +58,21 @@ class Estimator(tf.keras.Model):
         super().__init__()
         self.sr, self.t_off, self.arch = sr, t_off, arch
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
-        if arch == "v2":
-            # v8.2: 時間軸保存エンコーダ。周波数側を強くプーリング → BiGRU → attention pooling
+        if arch in ("v2", "v3"):
+            # v8.2: 時間軸保存エンコーダ。周波数側を強くプーリング → BiGRU → まとめ
+            #   v2: attention pooling（時間方向の重み付き平均）
+            #   v3: 時間方向の畳み込みで 23 → 6 コマに縮めて並べる（重み付き平均では ENV を学べない、実験 15・16）
             self.convs = [tf.keras.layers.Conv2D(c, 3, st, "same", activation="relu")
                           for c, st in ((32, (1, 2)), (64, (2, 2)),
                                         (96, (1, 2)), (128, (2, 2)))]
             self.bigru = tf.keras.layers.Bidirectional(
                 tf.keras.layers.GRU(128, return_sequences=True))
-            self.att = tf.keras.layers.Dense(1)
+            if arch == "v2":
+                self.att = tf.keras.layers.Dense(1)
+            else:
+                self.tconv = [tf.keras.layers.Conv1D(64, 3, 2, "same", activation="relu")
+                              for _ in range(2)]
+                self.drop = tf.keras.layers.Dropout(0.3)
         else:                                     # v1（最小骨格、比較用）
             self.convs = [tf.keras.layers.Conv2D(c, 3, 2, "same", activation="relu")
                           for c in (32, 64, 128)]
@@ -80,27 +87,32 @@ class Estimator(tf.keras.Model):
         self.h_stat = d(M)
         self.h_static = d(3)
 
-    def encode(self, x, f0):
+    def encode(self, x, f0, training=False):
         S = tf.abs(tf.signal.stft(x, 1024, 256, fft_length=1024))     # [B,T,513]
         mel = tf.math.log(tf.matmul(S, self.mel_mat) + 1e-5)          # [B,T,64]
         h = mel[..., None]
         for c in self.convs:
             h = c(h)
-        if self.arch == "v2":
+        if self.arch in ("v2", "v3"):
             B = tf.shape(h)[0]
             h = tf.reshape(h, [B, -1, h.shape[2] * h.shape[3]])       # [B,T',F'·C]
             h = self.bigru(h)                                          # [B,T',256]
-            w = tf.nn.softmax(self.att(h), axis=1)
-            h = tf.concat([tf.reduce_sum(w * h, axis=1),
-                           tf.reduce_mean(h, axis=1)], axis=-1)        # [B,512]
+            if self.arch == "v2":
+                w = tf.nn.softmax(self.att(h), axis=1)
+                h = tf.concat([tf.reduce_sum(w * h, axis=1),
+                               tf.reduce_mean(h, axis=1)], axis=-1)    # [B,512]
+            else:
+                for c in self.tconv:
+                    h = c(h)                                           # [B,6,64]
+                h = self.drop(tf.reshape(h, [B, h.shape[1] * h.shape[2]]), training=training)
         else:
             h = self.gap(h)
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
         return self.trunk(tf.concat([h, f0n], axis=-1))
 
-    def call(self, x, f0, temp=1.0, hard=True, noise=True):
+    def call(self, x, f0, temp=1.0, hard=True, noise=True, training=False):
         B = tf.shape(x)[0]
-        h = self.encode(x, f0)
+        h = self.encode(x, f0, training=training)
         # --- ENV（割合パラメータ化） ---
         ue = tf.sigmoid(tf.reshape(self.h_env(h), [B, K, 5]))
         a = tf.maximum(ue[..., 0] * self.t_off, 1e-3)
