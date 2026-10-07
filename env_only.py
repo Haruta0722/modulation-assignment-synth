@@ -46,9 +46,9 @@ class EnvNet(tf.keras.Model):
       tconv    : 時間方向の畳み込み（stride 2 を 2 回）で 23 → 6 コマに縮めてから並べる ＋ ドロップアウト
       mq       : 注目する時刻を学ぶクエリを n_query 個持ち、それぞれの重み付き和を並べる ＋ ドロップアウト
     """
-    def __init__(self, sr, mode, drop=0.3, n_query=4):
+    def __init__(self, sr, mode, drop=0.3, n_query=4, n_bins=0):
         super().__init__()
-        self.mode = mode
+        self.mode, self.n_bins = mode, n_bins
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
         self.convs = [tf.keras.layers.Conv2D(c, 3, st, "same", activation="relu")
                       for c, st in ((32, (1, 2)), (64, (2, 2)), (96, (1, 2)), (128, (2, 2)))]
@@ -58,9 +58,10 @@ class EnvNet(tf.keras.Model):
         self.drop = tf.keras.layers.Dropout(0.0 if mode in ("pool", "flat") else drop)
         self.hid = tf.keras.layers.Dense(256 if mode in ("pool", "flat", "flat_reg") else 128,
                                          activation="relu")
-        self.out_ = tf.keras.layers.Dense(5)
+        self.out_ = tf.keras.layers.Dense(5 * n_bins if n_bins else 5)
 
     def call(self, x, training=False):
+        """n_bins = 0 なら 5 つの値（0〜1）、> 0 なら 5 × n_bins の区間のロジットを返す"""
         S = tf.abs(tf.signal.stft(x, 1024, 256, fft_length=1024))
         h = tf.math.log(tf.matmul(S, self.mel_mat) + 1e-5)[..., None]
         for c in self.convs:
@@ -80,20 +81,48 @@ class EnvNet(tf.keras.Model):
             w = tf.nn.softmax(self.att(g), axis=1)                         # [B,T',Q] 時間方向に正規化
             v = tf.reshape(tf.einsum("btq,btc->bqc", w, g), [B, -1])       # [B,Q·256]
         v = self.drop(v, training=training)
-        return tf.sigmoid(self.out_(self.drop(self.hid(v), training=training)))
+        o = self.out_(self.drop(self.hid(v), training=training))
+        if self.n_bins:
+            return tf.reshape(o, [B, 5, self.n_bins])
+        return tf.sigmoid(o)
 
 
-def evaluate(model, data, idx, Y, batch):
-    P = np.concatenate([model(data.batch(idx[s:s + batch])[0]).numpy()
-                        for s in range(0, len(idx), batch)])
-    t = Y[idx]
+def hl_gauss_target(y, n_bins, sigma_ratio=0.75):
+    """HL-Gauss: 正解 y を中心とした正規分布を各区間に積分した確率 [B,5,n_bins]"""
+    edges = tf.linspace(0.0, 1.0, n_bins + 1)
+    sigma = sigma_ratio / n_bins
+    cdf = 0.5 * (1 + tf.math.erf((edges[None, None, :] - y[..., None]) / (sigma * np.sqrt(2))))
+    p = cdf[..., 1:] - cdf[..., :-1]
+    return p / tf.reduce_sum(p, -1, keepdims=True)
+
+
+def predict(model, data, idx, batch):
+    """回帰: {'reg': [n,5]}、分布: {'mean','mode': [n,5], 'entropy': [n,5]（区間数で正規化、1 = 一様）}"""
+    out = np.concatenate([model(data.batch(idx[s:s + batch])[0]).numpy()
+                          for s in range(0, len(idx), batch)])
+    if out.ndim == 2:
+        return {"reg": out}
+    nb = out.shape[-1]
+    p = np.exp(out - out.max(-1, keepdims=True))
+    p /= p.sum(-1, keepdims=True)
+    centers = (np.arange(nb) + 0.5) / nb
+    ent = -(p * np.log(np.maximum(p, 1e-12))).sum(-1) / np.log(nb)
+    return {"mean": (p * centers).sum(-1), "mode": centers[p.argmax(-1)], "entropy": ent}
+
+
+def scores(P, t):
     res = {}
     for j, n in enumerate(NAMES):
         err, err_c = np.abs(P[:, j] - t[:, j]), np.abs(np.median(t[:, j]) - t[:, j])
-        res[n] = dict(corr=float(np.corrcoef(P[:, j], t[:, j])[0, 1]),
+        res[n] = dict(corr=float(np.corrcoef(P[:, j], t[:, j])[0, 1]) if P[:, j].std() > 0 else 0.0,
                       ratio=float(P[:, j].std() / t[:, j].std()),
                       skill=float(1 - err.mean() / err_c.mean()))
     return res
+
+
+def evaluate(model, data, idx, Y, batch, kind=None):
+    pr = predict(model, data, idx, batch)
+    return scores(pr[kind or next(iter(pr))], Y[idx])
 
 
 def main():
@@ -106,6 +135,8 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--n_bins", type=int, default=0,
+                    help="> 0 なら回帰の代わりに区間の分類（HL-Gauss）で学習し、最頻値と平均の両方で評価")
     args = ap.parse_args()
     tf.random.set_seed(args.seed)
 
@@ -117,24 +148,30 @@ def main():
     te = data.splits["test"][ok[data.splits["test"]]]
     print(f"使用中の ENV が 1 つだけの音: 学習 {len(tr)} / 検証 {len(va)} / test {len(te)}", flush=True)
 
-    model = EnvNet(SR, args.mode)
+    model = EnvNet(SR, args.mode, n_bins=args.n_bins)
     model(tf.zeros([1, N]))
-    print(f"mode={args.mode}  全パラメータ {model.count_params():,}", flush=True)
+    print(f"mode={args.mode} n_bins={args.n_bins}  全パラメータ {model.count_params():,}", flush=True)
     opt = tf.keras.optimizers.Adam(args.lr)
+
+    def loss_fn(out, y):
+        if args.n_bins:                                                    # 区間の交差エントロピー
+            q = hl_gauss_target(y, args.n_bins)
+            return tf.reduce_mean(tf.reduce_sum(-q * tf.nn.log_softmax(out, -1), [-2, -1]))
+        return tf.reduce_mean(tf.reduce_sum((out - y) ** 2, -1))
 
     @tf.function
     def step(x, y):
         with tf.GradientTape() as tape:
-            loss = tf.reduce_mean(tf.reduce_sum((model(x, training=True) - y) ** 2, -1))
+            loss = loss_fn(model(x, training=True), y)
         g = tape.gradient(loss, model.trainable_variables)
         opt.apply_gradients(zip(g, model.trainable_variables))
         return loss
 
     def val_mse():
-        P = np.concatenate([model(data.batch(va[s:s + 128])[0]).numpy() for s in range(0, len(va), 128)])
-        return float(((P - Y[va]) ** 2).sum(1).mean())
+        return float(np.mean([loss_fn(model(data.batch(va[s:s + 128])[0]), tf.constant(Y[va[s:s + 128]]))
+                              for s in range(0, len(va), 128)]))
 
-    # 早期終了: 検証の二乗誤差が最小の時点の重みを残す
+    # 早期終了: 検証の損失（回帰は二乗誤差、分布は交差エントロピー）が最小の時点の重みを残す
     rng = np.random.default_rng(args.seed)
     best, best_it, best_w = np.inf, 0, None
     for it in range(args.steps + 1):
@@ -151,14 +188,23 @@ def main():
         w.assign(b)
 
     tr_sub = np.sort(rng.choice(tr, 2000, replace=False))
-    r, r_tr = evaluate(model, data, te, Y, 128), evaluate(model, data, tr_sub, Y, 128)
-    print(f"\n[test] mode={args.mode}（使用中の ENV が 1 つだけの音 {len(te)} 件、"
+    pr_te, pr_tr = predict(model, data, te, 128), predict(model, data, tr_sub, 128)
+    print(f"\n[test] mode={args.mode} n_bins={args.n_bins}（使用中の ENV が 1 つだけの音 {len(te)} 件、"
           f"検証が最良だった step {best_it} の重み）")
-    print(f"{'パラメータ':10s}{'相関':>8s}{'ばらつき比':>12s}{'誤差の改善':>12s}{'学習データの相関':>18s}")
-    for n in NAMES:
-        print(f"{n:10s}{r[n]['corr']:8.3f}{r[n]['ratio']:12.3f}{r[n]['skill']:12.3f}{r_tr[n]['corr']:18.3f}")
-    json.dump(dict(test=r, train=r_tr, best_step=best_it), open(args.out + ".json", "w"),
-              ensure_ascii=False, indent=1)
+    out = dict(best_step=best_it)
+    for kind in [k for k in ("reg", "mode", "mean") if k in pr_te]:
+        r, r_tr = scores(pr_te[kind], Y[te]), scores(pr_tr[kind], Y[tr_sub])
+        out[kind] = dict(test=r, train=r_tr)
+        print(f"\n  予測 = {dict(reg='回帰の出力', mode='分布の最頻値', mean='分布の平均')[kind]}")
+        print(f"{'パラメータ':10s}{'相関':>8s}{'ばらつき比':>12s}{'誤差の改善':>12s}{'学習データの相関':>18s}")
+        for n in NAMES:
+            print(f"{n:10s}{r[n]['corr']:8.3f}{r[n]['ratio']:12.3f}{r[n]['skill']:12.3f}{r_tr[n]['corr']:18.3f}")
+    if "entropy" in pr_te:
+        ent = pr_te["entropy"].mean(0)
+        out["entropy"] = dict(zip(NAMES, ent.tolist()))
+        print("\n  出力分布の広がり（正規化エントロピーの平均。1 = 一様 ＝ 何も読み取れていない）")
+        print("  " + "  ".join(f"{n}={e:.3f}" for n, e in zip(NAMES, ent)))
+    json.dump(out, open(args.out + ".json", "w"), ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":
