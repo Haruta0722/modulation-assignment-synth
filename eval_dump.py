@@ -57,7 +57,7 @@ def parse_args():
     ap.add_argument("--model", type=str, required=True, choices=["single", "two"])
     ap.add_argument("--ckpt_dir", type=str, required=True)
     ap.add_argument("--out", type=str, required=True)
-    ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3"],
+    ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"],
                     help="single のときのみ使用")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--hop", type=int, default=256)

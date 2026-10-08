@@ -59,7 +59,7 @@ def parse_args():
     ap.add_argument("--eval_n", type=int, default=512)
     ap.add_argument("--eval_only", action="store_true")
     ap.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
-    ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3"])
+    ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"])
     ap.add_argument("--spec_warm0", type=int, default=5000,
                     help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
     ap.add_argument("--spec_warmlen", type=int, default=5000,

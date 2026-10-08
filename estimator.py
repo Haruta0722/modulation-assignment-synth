@@ -58,18 +58,19 @@ class Estimator(tf.keras.Model):
         super().__init__()
         self.sr, self.t_off, self.arch = sr, t_off, arch
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
-        if arch in ("v2", "v3"):
+        if arch in ("v2", "v3", "v4"):
             # v8.2: 時間軸保存エンコーダ。周波数側を強くプーリング → BiGRU → まとめ
             #   v2: attention pooling（時間方向の重み付き平均）
             #   v3: 時間方向の畳み込みで 23 → 6 コマに縮めて並べる（重み付き平均では ENV を学べない、実験 15・16）
+            #   v4: v2 と v3 を並べる（v3 では音全体の平均から分かる θ_stat・検出が下がった、実験 19）
             self.convs = [tf.keras.layers.Conv2D(c, 3, st, "same", activation="relu")
                           for c, st in ((32, (1, 2)), (64, (2, 2)),
                                         (96, (1, 2)), (128, (2, 2)))]
             self.bigru = tf.keras.layers.Bidirectional(
                 tf.keras.layers.GRU(128, return_sequences=True))
-            if arch == "v2":
+            if arch in ("v2", "v4"):
                 self.att = tf.keras.layers.Dense(1)
-            else:
+            if arch in ("v3", "v4"):
                 self.tconv = [tf.keras.layers.Conv1D(64, 3, 2, "same", activation="relu")
                               for _ in range(2)]
                 self.drop = tf.keras.layers.Dropout(0.3)
@@ -93,18 +94,21 @@ class Estimator(tf.keras.Model):
         h = mel[..., None]
         for c in self.convs:
             h = c(h)
-        if self.arch in ("v2", "v3"):
+        if self.arch in ("v2", "v3", "v4"):
             B = tf.shape(h)[0]
             h = tf.reshape(h, [B, -1, h.shape[2] * h.shape[3]])       # [B,T',F'·C]
-            h = self.bigru(h)                                          # [B,T',256]
-            if self.arch == "v2":
-                w = tf.nn.softmax(self.att(h), axis=1)
-                h = tf.concat([tf.reduce_sum(w * h, axis=1),
-                               tf.reduce_mean(h, axis=1)], axis=-1)    # [B,512]
-            else:
+            g = self.bigru(h)                                          # [B,T',256]
+            parts = []
+            if self.arch in ("v2", "v4"):                              # 音全体の平均
+                w = tf.nn.softmax(self.att(g), axis=1)
+                parts += [tf.reduce_sum(w * g, axis=1), tf.reduce_mean(g, axis=1)]   # [B,512]
+            if self.arch in ("v3", "v4"):                              # 時間の形
+                t = g
                 for c in self.tconv:
-                    h = c(h)                                           # [B,6,64]
-                h = self.drop(tf.reshape(h, [B, h.shape[1] * h.shape[2]]), training=training)
+                    t = c(t)                                           # [B,6,64]
+                parts.append(self.drop(tf.reshape(t, [B, t.shape[1] * t.shape[2]]),
+                                       training=training))             # [B,384]
+            h = tf.concat(parts, axis=-1)
         else:
             h = self.gap(h)
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
