@@ -194,8 +194,9 @@ def losses2(pred, batch, x_true, sr, t_off, n_harm, lam, hop=256):
     # ---- パラメータ（従来と同じ、used マスクつき） ----
     sp, tl = pred["src_params"], pred["type_logits"]
     if lam.get("env_frac", 0):
+        ew = tf.constant(lam.get("env_w", [1.0] * 5), tf.float32)   # (a,h,d,s,r) ごとの重み
         d_env = tf.reduce_sum(
-            (env_frac(sp, t_off) - env_frac(batch["src_params"], t_off)) ** 2, -1)
+            ew * (env_frac(sp, t_off) - env_frac(batch["src_params"], t_off)) ** 2, -1)
     else:
         d_env = tf.reduce_sum(
             (((sp - batch["src_params"]) / SLOT_SCALE_ENV) ** 2), -1)

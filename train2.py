@@ -61,6 +61,8 @@ def parse_args():
                     help="ソースのパラメータ損失 l_src だけに掛ける追加の重み（λ_param の内側）")
     ap.add_argument("--env_frac", action="store_true",
                     help="ENV のパラメータ損失を秒ではなく割合空間（出力・生成と同じ）で取る")
+    ap.add_argument("--env_w", type=str, default="1,1,1,1,1",
+                    help="--env_frac 時の ENV の項ごとの重み（attack,hold,decay,sustain,release）")
     ap.add_argument("--seed", type=int, default=0)
     return ap.parse_args()
 
@@ -78,6 +80,7 @@ def main():
     LAM["depth_none0"] = float(args.depth_none0)
     LAM["src_w"] = args.src_w
     LAM["env_frac"] = float(args.env_frac)
+    LAM["env_w"] = [float(v) for v in args.env_w.split(",")]
     print(f"LAM = {LAM}")
 
     data = T1.Data(args.data)

@@ -239,8 +239,9 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     wS = (tf.ones([K, 5]) if md is None
           else tf.reshape(tf.constant(md[20:40], tf.float32), [K, 5]))
     if lam.get("env_frac", 0):
+        ew = tf.constant(lam.get("env_w", [1.0] * 5), tf.float32)   # (a,h,d,s,r) ごとの重み
         d_env = tf.reduce_sum(
-            wS * (env_frac(src_p, t_off) - env_frac(batch["src_params"], t_off)) ** 2, -1)
+            ew * wS * (env_frac(src_p, t_off) - env_frac(batch["src_params"], t_off)) ** 2, -1)
     else:
         d_env = tf.reduce_sum(wS * ((src_p - batch["src_params"]) / SLOT_SCALE_ENV) ** 2, -1)
     dphi = tf.abs(src_p[..., 1] - batch["src_params"][..., 1])
