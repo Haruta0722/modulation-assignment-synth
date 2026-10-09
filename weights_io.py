@@ -57,6 +57,26 @@ def load(model, path):
     print(f"weights loaded & verified: {path} ({len(_model_vars(model))} variables)")
 
 
+def check_config(ckpt_dir, cfg, write=False):
+    """構造・活性化関数など、重みの照合では分からない設定を ckpt と突き合わせる。
+    活性化関数が違っても重みは読み込めてしまい、出力だけが変わるため"""
+    import json
+    path = os.path.join(ckpt_dir, "model_config.json")
+    if write:
+        os.makedirs(ckpt_dir, exist_ok=True)
+        if os.path.exists(path):
+            check_config(ckpt_dir, cfg)
+        else:
+            json.dump(cfg, open(path, "w"), indent=1)
+        return
+    if not os.path.exists(path):
+        return                                    # 設定の記録を始める前の ckpt
+    saved = json.load(open(path))
+    diff = {k: (saved.get(k), v) for k, v in cfg.items() if k in saved and saved[k] != v}
+    if diff:
+        raise SystemExit(f"{path} の設定と一致しません（保存時, 今回）: {diff}")
+
+
 def ckpt_weights_path(ckpt_prefix):
     """CheckpointManager の保存先（…/ckpt-60）に対応する重みファイル"""
     return ckpt_prefix + SUFFIX

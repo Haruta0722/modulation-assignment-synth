@@ -53,17 +53,26 @@ def gumbel_st(logits, temp=1.0, hard=True, noise=True):
     return y
 
 
+def leaky_relu(x):
+    """負の入力にも傾き 0.01 を残す ReLU（働かなくなったユニットにも勾配が届く）"""
+    return tf.nn.leaky_relu(x, alpha=0.01)
+
+
+ACTIVATIONS = {"relu": "relu", "leaky": leaky_relu}
+
+
 class Estimator(tf.keras.Model):
-    def __init__(self, sr=16000, t_off=1.0, arch="v2"):
+    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu"):
         super().__init__()
-        self.sr, self.t_off, self.arch = sr, t_off, arch
+        self.sr, self.t_off, self.arch, self.act = sr, t_off, arch, act
+        a = ACTIVATIONS[act]                      # 畳み込み・時間方向の畳み込み・trunk の活性化関数
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
         if arch in ("v2", "v3", "v4"):
             # v8.2: 時間軸保存エンコーダ。周波数側を強くプーリング → BiGRU → まとめ
             #   v2: attention pooling（時間方向の重み付き平均）
             #   v3: 時間方向の畳み込みで 23 → 6 コマに縮めて並べる（重み付き平均では ENV を学べない、実験 15・16）
             #   v4: v2 と v3 を並べる（v3 では音全体の平均から分かる θ_stat・検出が下がった、実験 19）
-            self.convs = [tf.keras.layers.Conv2D(c, 3, st, "same", activation="relu")
+            self.convs = [tf.keras.layers.Conv2D(c, 3, st, "same", activation=a)
                           for c, st in ((32, (1, 2)), (64, (2, 2)),
                                         (96, (1, 2)), (128, (2, 2)))]
             self.bigru = tf.keras.layers.Bidirectional(
@@ -71,14 +80,14 @@ class Estimator(tf.keras.Model):
             if arch in ("v2", "v4"):
                 self.att = tf.keras.layers.Dense(1)
             if arch in ("v3", "v4"):
-                self.tconv = [tf.keras.layers.Conv1D(64, 3, 2, "same", activation="relu")
+                self.tconv = [tf.keras.layers.Conv1D(64, 3, 2, "same", activation=a)
                               for _ in range(2)]
                 self.drop = tf.keras.layers.Dropout(0.3)
         else:                                     # v1（最小骨格、比較用）
-            self.convs = [tf.keras.layers.Conv2D(c, 3, 2, "same", activation="relu")
+            self.convs = [tf.keras.layers.Conv2D(c, 3, 2, "same", activation=a)
                           for c in (32, 64, 128)]
             self.gap = tf.keras.layers.GlobalAveragePooling2D()
-        self.trunk = tf.keras.layers.Dense(256, activation="relu")
+        self.trunk = tf.keras.layers.Dense(256, activation=a)
         d = tf.keras.layers.Dense
         self.h_env = d(K * 5)
         self.h_lfo = d(K * 4)

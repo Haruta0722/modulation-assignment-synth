@@ -59,6 +59,8 @@ def parse_args():
     ap.add_argument("--out", type=str, required=True)
     ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"],
                     help="single のときのみ使用")
+    ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
+                    help="single のときのみ使用。学習時と同じものを指定する")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--hop", type=int, default=256)
     ap.add_argument("--temp_lo", type=float, default=0.3)
@@ -79,7 +81,8 @@ def main():
     if args.model == "two":
         model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop)
     else:
-        model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch)
+        W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act))
+        model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act)
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
 
     W.load(model, W.latest(args.ckpt_dir))

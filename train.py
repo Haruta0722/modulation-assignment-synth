@@ -60,6 +60,8 @@ def parse_args():
     ap.add_argument("--eval_only", action="store_true")
     ap.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
     ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"])
+    ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
+                    help="畳み込み・時間方向の畳み込み・trunk の活性化関数")
     ap.add_argument("--spec_warm0", type=int, default=5000,
                     help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
     ap.add_argument("--spec_warmlen", type=int, default=5000,
@@ -328,7 +330,8 @@ def main():
     fmax = E.F0_LO * 2 ** (100 / 1200)
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
 
-    model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch)
+    W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act), write=not args.eval_only)
+    model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act)
     # v8.4: GRU 等の遅延構築レイヤをチェックポイント復元前にビルドしておく
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)
@@ -389,6 +392,31 @@ def main():
             nb += 1
         return {k: v / nb for k, v in agg.items()}
 
+    trunk_idx = data.splits["val"][:512]
+
+    def trunk_stats(step):
+        """trunk（共有層 256）の状態: 正の値を出したことのあるユニット、ほぼ一定のユニット、実効次元"""
+        acts = []
+        for s in range(0, len(trunk_idx), 128):
+            x, b = data.batch(trunk_idx[s:s + 128])
+            acts.append(model.encode(x, b["f0"]).numpy())
+        A = np.concatenate(acts)
+        var = A.var(0)
+        ev = np.sort(np.linalg.eigvalsh(np.cov(A.T)))[::-1]
+        cum = np.cumsum(ev) / max(ev.sum(), 1e-12)
+        r = dict(step=step, active=int((A > 0).any(0).sum()),
+                 near_const=int((var < 0.01 * max(var.max(), 1e-12)).sum()),
+                 dim90=int(np.searchsorted(cum, 0.9) + 1), dim99=int(np.searchsorted(cum, 0.99) + 1))
+        print(f"  [trunk] step={step} 正の値を出すユニット={r['active']}/256 ほぼ一定={r['near_const']} "
+              f"実効次元(90%/99%)={r['dim90']}/{r['dim99']}", flush=True)
+        path = os.path.join(args.ckpt_dir, "trunk_stats.csv")
+        new = not os.path.exists(path)
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(r))
+            if new:
+                w.writeheader()
+            w.writerow(r)
+
     if args.eval_only:
         r = evaluate(args.split, len(data.splits[args.split]))
         print(f"== §9.2 evaluation on {args.split} ==")
@@ -410,6 +438,9 @@ def main():
     t0, last = time.time(), int(step_var)
     while int(step_var) < args.steps:
         step = int(step_var)
+        # ユニットが働かなくなる時期を見るため、序盤は細かく記録する
+        if step in (0, 50, 100, 200, 300, 500, 1000, 2000) or (step > 0 and step % 5000 == 0):
+            trunk_stats(step)
         idx = rng.choice(train_idx, args.batch, replace=False)
         x, batch = data.batch(idx)
         temp = temp_at(step)
