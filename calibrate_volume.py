@@ -48,6 +48,9 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--jtfs", action="store_true", help="JTFS の距離も測る（重い）")
     ap.add_argument("--modes", default="d1,orig")
+    ap.add_argument("--splits", default="test", help="使う分割（例: test,val）")
+    ap.add_argument("--min_sustain", type=float, default=0.0,
+                    help="sustain がこれ以上の ENV だけを使う（0.8 なら「立ち上がり → ほぼ一定 → 鳴り終わり」の形）")
     ap.add_argument("--out", default="calibrate_volume.npz")
     args = ap.parse_args()
 
@@ -69,13 +72,16 @@ def main():
     # 対象の音と、その音量の ENV（ソース番号）を選ぶ
     P = data.P
     picks = []                                       # (データの通し番号, ソース k, attack 対象か, release 対象か)
-    for i in data.splits["test"]:
+    pool = np.concatenate([data.splits[s] for s in args.splits.split(",")])
+    for i in pool:
         z, sp, st = P["z"][i].astype(int), P["src_params"][i], P["src_type"][i]
         for k in range(K):
             cols = set(np.nonzero(z == k)[0])
             if not cols or st[k] != 1 or not cols <= LEVEL:
                 continue
             a, h, d, s, r = sp[k]
+            if s < args.min_sustain:
+                continue
             okA, okR = a >= 0.08, r >= 0.08 and s > 0.05
             if okA or okR:
                 picks.append((i, k, okA, okR))
