@@ -1,6 +1,7 @@
 r"""calibrate_volume.py — 音量の ENV の attack / release を秒でずらしたときの、ペアごとの距離を測る
 
-  python calibrate_volume.py --n 800
+  python calibrate_volume.py --n 800                       # 対数メル・MR-STFT
+  python calibrate_volume.py --n 400 --jtfs                # ＋ JTFS（PNP の知覚距離）
 
 聞き分けの限界の基準: 立ち上がり・終わりの減衰の時間の弁別閾 ≈ 25%（van Heuven & van den Broecke 1979、
 McAdams 2019 に引用）。元の時間が 80 ms 以上で当てはまりやすい。原典の "decay" は鳴り終わりの減衰なので、
@@ -13,7 +14,13 @@ McAdams 2019 に引用）。元の時間が 80 ms 以上で当てはまりやす
 深さの条件:
   d1   : その ENV がつながる音量の列の深さを 1、静的な値を 0 にする（無音から最大まで、原典に近い条件）
   orig : 元の深さのまま（|深さ| の区間別に集計）
-距離（元の音と、ずらした音のペアごと）: 対数メル（モデルの入力と同じ）の平均絶対差、MR-STFT 損失。
+距離（元の音と、ずらした音のペアごと）
+  logmel   : 対数メル（モデルの入力と同じ）の平均絶対差
+  mrstft   : MR-STFT 損失
+  jtfs_pnp : JTFS（PNP 損失の M(θ) を作ったのと同じ設定 J=8, Q=6, J_fr=2, Q_fr=2）の係数の差の L2
+  jtfs_slow: JTFS の時間方向の 2 次ウェーブレットを約 1 Hz まで伸ばした設定（J_fr=6）の L2
+  *_rel    : JTFS の差の L2 を元の音の係数の L2 で割ったもの（音の大きさによらない）
+知覚的に一様な距離なら、attack ±25% と release ±25% の距離はほぼ等しくなるはず。
 """
 import argparse, os
 
@@ -26,6 +33,7 @@ import diff_synth_tf as ds
 import train as T
 from audibility import logmel, quantize
 from diff_synth_fast import synth_fast
+from jtfs_tf import JTFS
 
 K = ds.K_ENVS
 LEVEL = {0, 1}                                       # level1, level2
@@ -38,17 +46,30 @@ def main():
     ap.add_argument("--data", default="dataset_v7")
     ap.add_argument("--n", type=int, default=800, help="対象の音の最大数")
     ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--jtfs", action="store_true", help="JTFS の距離も測る（重い）")
+    ap.add_argument("--modes", default="d1,orig")
+    ap.add_argument("--out", default="calibrate_volume.npz")
     args = ap.parse_args()
 
     data = T.Data(args.data)
     SR, N, T_OFF = data.man["sr"], data.man["N"], data.man["t_off"]
     TAIL = N / SR - T_OFF
 
+    # 距離: 名前 → (特徴を作る関数, 2 つの特徴から距離 [B] を出す関数)
+    feats = {"logmel": (lambda x: logmel(x, SR),
+                        lambda a, b: tf.reduce_mean(tf.abs(a - b), [1, 2]).numpy())}
+    if args.jtfs:
+        for name, kw in (("jtfs_pnp", dict(J=8, Q=6, J_fr=2, Q_fr=2)),
+                         ("jtfs_slow", dict(J=8, Q=6, J_fr=6, Q_fr=2))):
+            phi = JTFS(sr=SR, **kw)
+            f = tf.function(phi.call, reduce_retracing=True)
+            feats[name] = (f, lambda a, b: tf.norm(a - b, axis=1).numpy())
+            feats[name + "_rel"] = (None, None)      # name の特徴を使って割合を出す
+
     # 対象の音と、その音量の ENV（ソース番号）を選ぶ
-    idx_all = data.splits["test"]
     P = data.P
     picks = []                                       # (データの通し番号, ソース k, attack 対象か, release 対象か)
-    for i in idx_all:
+    for i in data.splits["test"]:
         z, sp, st = P["z"][i].astype(int), P["src_params"][i], P["src_type"][i]
         for k in range(K):
             cols = set(np.nonzero(z == k)[0])
@@ -61,7 +82,8 @@ def main():
                 break
         if len(picks) >= args.n:
             break
-    print(f"対象の音 {len(picks)}（attack {sum(p[2] for p in picks)} / release {sum(p[3] for p in picks)}）", flush=True)
+    print(f"対象の音 {len(picks)}（attack {sum(p[2] for p in picks)} / release {sum(p[3] for p in picks)}）"
+          f"  距離: {', '.join(feats)}", flush=True)
 
     def synth(b, sp, R, th):
         f0 = b["f0"].numpy()
@@ -75,7 +97,20 @@ def main():
                                 T_OFF, N, SR, hs, hq, src_type=g(b["src_type"])).numpy()
         return quantize(tf.constant(out), data.scale)
 
-    rows = []                                        # (param, f, mode, |深さ|, 対数メル, MR-STFT)
+    def features(x):
+        return {k: fn(x) for k, (fn, _) in feats.items() if fn is not None}
+
+    def distances(F0, x0, x1):
+        F1 = features(x1)
+        out = {k: feats[k][1](F0[k], F1[k]) for k in F0}
+        out["mrstft"] = ds.mrstft_loss(x1, x0).numpy()
+        for k in list(F0):
+            if k.startswith("jtfs"):
+                out[k + "_rel"] = out[k] / np.maximum(tf.norm(F0[k], axis=1).numpy(), 1e-12)
+        return out
+
+    rows = []                                        # dict: param, f, mode, depth, 各距離
+    modes = args.modes.split(",")
     for s0 in range(0, len(picks), args.batch):
         chunk = picks[s0:s0 + args.batch]
         idx = np.array([p[0] for p in chunk])
@@ -93,8 +128,10 @@ def main():
                 R1[j, ks[j], c], th1[j, c] = 1.0, 0.0
 
         for mode, R, th in (("d1", R1, th1), ("orig", R0, th0)):
+            if mode not in modes:
+                continue
             x0 = synth(b, sp0, R, th)
-            L0 = logmel(x0, SR)
+            F0 = features(x0)
             for param in ("attack", "release"):
                 for f in FACTORS:
                     sp = sp0.copy()
@@ -107,40 +144,55 @@ def main():
                             sp[j, k, 4], ok[j] = r * f, True
                     if not ok.any():
                         continue
-                    x1 = synth(b, sp, R, th)
-                    dm = tf.reduce_mean(tf.abs(logmel(x1, SR) - L0), [1, 2]).numpy()
-                    dr = ds.mrstft_loss(x1, x0).numpy()
+                    D = distances(F0, x0, synth(b, sp, R, th))
                     for j in np.nonzero(ok)[0]:
-                        rows.append((param, f, mode, dep[j], dm[j], dr[j]))
+                        rows.append(dict(param=param, f=f, mode=mode, depth=dep[j],
+                                         **{k: float(v[j]) for k, v in D.items()}))
         print(f"  {s0 + B} / {len(picks)}", flush=True)
 
-    rec = np.array([(r[1], r[3], r[4], r[5]) for r in rows])
-    par = np.array([r[0] for r in rows])
-    mod = np.array([r[2] for r in rows])
-    q = lambda v: " / ".join(f"{x:.4f}" for x in np.percentile(v, [25, 50, 75]))
+    names = [k for k in rows[0] if k not in ("param", "f", "mode", "depth")]
+    col = lambda k: np.array([r[k] for r in rows])
+    par, mod, fac, dep = col("param"), col("mode"), col("f").astype(float), col("depth").astype(float)
+    jnd = np.isclose(np.abs(np.log(fac)), np.log(1.25))
 
-    for mode, label in (("d1", "深さ 1（静的な値 0）"), ("orig", "元の深さ")):
-        print(f"\n==== {label} ====")
+    print("\n==== 弁別閾（±25%）での距離の中央値と、attack / release の比（1 に近いほど知覚的に一様） ====")
+    for mode in modes:
+        print(f"\n  [{mode}]")
+        print(f"  {'距離':14s}{'attack':>10s}{'release':>10s}{'比 A/R':>9s}   距離と |log 倍率| の順位相関（単調性）")
+        for k in names:
+            v = col(k).astype(float)
+            sa = (par == "attack") & (mod == mode) & jnd
+            sr = (par == "release") & (mod == mode) & jnd
+            ma, mr = np.median(v[sa]), np.median(v[sr])
+            sm = mod == mode
+            rk = lambda u: np.argsort(np.argsort(u))
+            rho = np.corrcoef(rk(v[sm]), rk(np.abs(np.log(fac[sm]))))[0, 1]
+            print(f"  {k:14s}{ma:10.4g}{mr:10.4g}{ma / mr:9.2f}   {rho:.3f}")
+
+    print("\n==== 倍率ごとの中央値 ====")
+    for mode in modes:
         for param in ("attack", "release"):
-            print(f"\n  {param}")
-            print(f"  {'倍率':>8s}{'件数':>6s}   {'対数メル(25/50/75%)':26s}   MR-STFT(25/50/75%)")
-            for f in FACTORS:
-                s = (par == param) & (mod == mode) & np.isclose(rec[:, 0], f)
-                if s.sum():
-                    tag = " ← 弁別閾" if np.isclose(abs(np.log(f)), np.log(1.25)) else ""
-                    print(f"  ×{f:6.3f}{s.sum():6d}   {q(rec[s, 2]):26s}   {q(rec[s, 3])}{tag}")
+            print(f"\n  [{mode} / {param}]  " + "  ".join(f"×{f:.3f}" for f in FACTORS))
+            for k in names:
+                v = col(k).astype(float)
+                vals = []
+                for f in FACTORS:
+                    s = (par == param) & (mod == mode) & np.isclose(fac, f)
+                    vals.append(f"{np.median(v[s]):.4g}" if s.any() else "-")
+                print(f"  {k:14s}" + "  ".join(f"{t:>7s}" for t in vals))
 
-    print("\n==== 元の深さ・±25% の距離（対数メルの中央値）を |深さ| の区間別に ====")
-    for param in ("attack", "release"):
-        s25 = (par == param) & (mod == "orig") & np.isclose(np.abs(np.log(rec[:, 0])), np.log(1.25))
-        line = []
-        for lo, hi in DEPTH_BINS:
-            s = s25 & (rec[:, 1] >= lo) & (rec[:, 1] < hi)
-            line.append(f"[{lo:.1f},{hi:.1f}) n={s.sum()} {np.median(rec[s, 2]) if s.any() else float('nan'):.4f}")
-        print(f"  {param:8s} " + "   ".join(line))
+    if "orig" in modes:
+        print("\n==== 元の深さ・±25% の距離の中央値を |深さ| の区間別に ====")
+        for k in names:
+            v = col(k).astype(float)
+            for param in ("attack", "release"):
+                s25 = (par == param) & (mod == "orig") & jnd
+                line = [f"{np.median(v[s25 & (dep >= lo) & (dep < hi)]):.4g}"
+                        if (s25 & (dep >= lo) & (dep < hi)).any() else "-" for lo, hi in DEPTH_BINS]
+                print(f"  {k:14s}{param:8s} " + " / ".join(line))
 
-    np.savez("calibrate_volume.npz", factor=rec[:, 0], depth=rec[:, 1], logmel=rec[:, 2],
-             mrstft=rec[:, 3], param=par, mode=mod)
+    np.savez(args.out, param=par, mode=mod, factor=fac, depth=dep,
+             **{k: col(k).astype(float) for k in names})
 
 
 if __name__ == "__main__":
