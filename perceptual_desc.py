@@ -28,7 +28,10 @@ def taus(cal, dist, kinds=("depth", "env")):
     for m in range(M):
         sel = (m_ == m) & np.isin(kind, kinds)
         e, v = err[sel], d[sel]
-        edges = np.unique(np.quantile(e, np.linspace(0, 1, 9)))
+        if len(e) < 10:
+            out.append((np.nan, "?"))
+            continue
+        edges =np.unique(np.quantile(e, np.linspace(0, 1, 9)))
         xs, ps = [], []
         for lo, hi in zip(edges[:-1], edges[1:]):
             s = (e >= lo) & (e <= hi)
@@ -50,12 +53,15 @@ def taus(cal, dist, kinds=("depth", "env")):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dumps", nargs="+")
-    ap.add_argument("--calib", default="calibrate_dest.npz")
+    ap.add_argument("--calib", default="calibrate_dest.npz",
+                    help="カンマ区切りで複数。後のファイルにある変調先は後の値で上書き（細かく測り直したもの）")
     ap.add_argument("--dist", default="jtfs_pnp_rel")
     args = ap.parse_args()
 
-    cal = np.load(args.calib)
-    Dstar, tl = taus(cal, args.dist)
+    tl = None
+    for path in args.calib.split(","):
+        Dstar, t2 = taus(np.load(path), args.dist)
+        tl = t2 if tl is None else [b if not np.isnan(b[0]) else a for a, b in zip(tl, t2)]
     tau = np.array([t for t, _ in tl])
     print(f"距離 {args.dist}、D* = {Dstar:.4g}")
     print("τ_m: " + ", ".join(f"{NAMES[m]} {n}{t:.3f}" for m, (t, n) in enumerate(tl)))

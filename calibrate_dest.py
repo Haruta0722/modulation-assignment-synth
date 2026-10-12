@@ -57,6 +57,7 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="calibrate_dest.npz")
+    ap.add_argument("--antialias", action="store_true", help="JTFS で間引く前に平均する（折り返しを防ぐ）")
     ap.add_argument("--dests", default="", help="変調先の番号を絞る（例: 2,3,4,7,10）")
     ap.add_argument("--depths", default="", help="深さの誤差（例: 0.003,0.006,0.012,0.025）")
     ap.add_argument("--sigmas", default="", help="ENV の割合の雑音（例: 0.005,0.01,0.02,0.04）")
@@ -74,8 +75,8 @@ def main():
     fidx = np.minimum(np.arange(1 + (N - 1024) // 256) * 256 + 512, N - 1)
 
     # 距離（calibrate_volume.py と同じもの）
-    phis = {"jtfs_pnp": JTFS(sr=SR, J=8, Q=6, J_fr=2, Q_fr=2),
-            "jtfs_slow": JTFS(sr=SR, J=8, Q=6, J_fr=6, Q_fr=2)}
+    phis = {"jtfs_pnp": JTFS(sr=SR, J=8, Q=6, J_fr=2, Q_fr=2, antialias=args.antialias),
+            "jtfs_slow": JTFS(sr=SR, J=8, Q=6, J_fr=6, Q_fr=2, antialias=args.antialias)}
     fns = {k: tf.function(p.call, reduce_retracing=True) for k, p in phis.items()}
 
     def features(x):

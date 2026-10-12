@@ -46,9 +46,12 @@ def cqt_bank(J, Q, n_taps=None):
 class JTFS(tf.keras.layers.Layer):
     """Φ(x): [B,N] → [B,D]（時間平均済みの JTFS 係数）"""
 
-    def __init__(self, J=12, Q=8, J_fr=3, Q_fr=2, T_log2=11, sr=16000, **kw):
+    def __init__(self, J=12, Q=8, J_fr=3, Q_fr=2, T_log2=11, sr=16000, antialias=False, **kw):
         super().__init__(**kw)
         self.sr = sr
+        # antialias=False は間引くだけ（既存の M(θ) と同じ）。間引く前に平均しないと、高調波どうしの干渉による
+        # 速い振幅の揺れが折り返し、数サンプルの遅延でも係数が大きく変わる（実験 32）
+        self.antialias = antialias
         self.T = 2 ** T_log2                          # 時間平均窓（サンプル）
         # --- 1次: 時間 CQT ---
         self.f1 = cqt_bank(J, Q)
@@ -69,7 +72,11 @@ class JTFS(tf.keras.layers.Layer):
 
     def scalogram(self, x):
         """U1: [B, n_lam, T'] （時間ダウンサンプル済み）"""
-        rows = [self._conv1d_c(x, psi)[:, ::self.ds] for psi, _ in self.f1]
+        if self.antialias:
+            rows = [tf.nn.avg_pool1d(self._conv1d_c(x, psi)[:, :, None], self.ds, self.ds, "SAME")[:, :, 0]
+                    for psi, _ in self.f1]
+        else:
+            rows = [self._conv1d_c(x, psi)[:, ::self.ds] for psi, _ in self.f1]
         return tf.stack(rows, axis=1)
 
     def _conv2d_c(self, u, psi_t, psi_f):

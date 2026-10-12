@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--n", type=int, default=800, help="対象の音の最大数")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--jtfs", action="store_true", help="JTFS の距離も測る（重い）")
+    ap.add_argument("--antialias", action="store_true", help="JTFS で間引く前に平均する（折り返しを防ぐ）")
     ap.add_argument("--modes", default="d1,orig")
     ap.add_argument("--splits", default="test", help="使う分割（例: test,val）")
     ap.add_argument("--min_sustain", type=float, default=0.0,
@@ -64,7 +65,7 @@ def main():
     if args.jtfs:
         for name, kw in (("jtfs_pnp", dict(J=8, Q=6, J_fr=2, Q_fr=2)),
                          ("jtfs_slow", dict(J=8, Q=6, J_fr=6, Q_fr=2))):
-            phi = JTFS(sr=SR, **kw)
+            phi = JTFS(sr=SR, antialias=args.antialias, **kw)
             f = tf.function(phi.call, reduce_retracing=True)
             feats[name] = (f, lambda a, b: tf.norm(a - b, axis=1).numpy())
             feats[name + "_rel"] = (None, None)      # name の特徴を使って割合を出す
