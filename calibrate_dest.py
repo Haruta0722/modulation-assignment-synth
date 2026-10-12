@@ -25,6 +25,7 @@ import train as T
 from audibility import logmel, quantize
 from diff_synth_fast import synth_fast
 from jtfs_tf import JTFS
+from perceptual_dist import LocalJTFS
 
 K, M = ds.K_ENVS, ds.M_DEST
 NAMES = [d[0] for d in ds.dest_specs(16000)]
@@ -61,6 +62,10 @@ def main():
     ap.add_argument("--dests", default="", help="変調先の番号を絞る（例: 2,3,4,7,10）")
     ap.add_argument("--depths", default="", help="深さの誤差（例: 0.003,0.006,0.012,0.025）")
     ap.add_argument("--sigmas", default="", help="ENV の割合の雑音（例: 0.005,0.01,0.02,0.04）")
+    ap.add_argument("--local", default="", help="局所的な JTFS の物差しの名前（例: u2/P32ms/30dB/max）")
+    ap.add_argument("--local_ref", default="jtfs_local_select.npz",
+                    help="--local の D* を取る log_jtfs_check.py の結果")
+    ap.add_argument("--only_local", action="store_true", help="時間全体で平均する JTFS の距離は測らない（速い）")
     args = ap.parse_args()
     global DEPTHS, SIGMAS
     if args.depths:
@@ -75,13 +80,19 @@ def main():
     fidx = np.minimum(np.arange(1 + (N - 1024) // 256) * 256 + 512, N - 1)
 
     # 距離（calibrate_volume.py と同じもの）
-    phis = {"jtfs_pnp": JTFS(sr=SR, J=8, Q=6, J_fr=2, Q_fr=2, antialias=args.antialias),
-            "jtfs_slow": JTFS(sr=SR, J=8, Q=6, J_fr=6, Q_fr=2, antialias=args.antialias)}
+    phis = {} if args.only_local else {
+        "jtfs_pnp": JTFS(sr=SR, J=8, Q=6, J_fr=2, Q_fr=2, antialias=args.antialias),
+        "jtfs_slow": JTFS(sr=SR, J=8, Q=6, J_fr=6, Q_fr=2, antialias=args.antialias)}
     fns = {k: tf.function(p.call, reduce_retracing=True) for k, p in phis.items()}
+    local = LocalJTFS.from_name(args.local, SR) if args.local else None
 
     def features(x):
-        F = {"logmel": logmel(x, SR)}
-        F.update({k: f(x) for k, f in fns.items()})
+        """x は量子化していない音。対数メル・全体平均の JTFS は量子化した音で、局所的な JTFS はそのままで測る"""
+        xq = quantize(x, data.scale)
+        F = {"logmel": logmel(xq, SR)}
+        F.update({k: f(xq) for k, f in fns.items()})
+        if local:
+            F["local"] = local.features(x)
         return F
 
     def distances(F0, x1):
@@ -91,15 +102,25 @@ def main():
             d = tf.norm(F1[k] - F0[k], axis=1).numpy()
             out[k] = d
             out[k + "_rel"] = d / np.maximum(tf.norm(F0[k], axis=1).numpy(), 1e-12)
+        if local:
+            out["local"] = local.distance(F0["local"], F1["local"])
         return out
 
     # 聞き分けの限界 D*: 音量の attack / release を ±25% 変えたときの距離の中央値
-    ref = np.load(args.ref)
-    jnd = np.isclose(np.abs(np.log(ref["factor"])), np.log(1.25)) & (ref["mode"] == args.ref_mode)
-    dist_names = [k for k in ref.files if k not in ("param", "mode", "factor", "depth", "mrstft")]
-    Dstar = {k: dict(attack=float(np.median(ref[k][jnd & (ref["param"] == "attack")])),
-                     release=float(np.median(ref[k][jnd & (ref["param"] == "release")])),
-                     both=float(np.median(ref[k][jnd]))) for k in dist_names}
+    Dstar = {}
+    if not args.only_local:
+        ref = np.load(args.ref)
+        jnd = np.isclose(np.abs(np.log(ref["factor"])), np.log(1.25)) & (ref["mode"] == args.ref_mode)
+        dist_names = [k for k in ref.files if k not in ("param", "mode", "factor", "depth", "mrstft")]
+        Dstar = {k: dict(attack=float(np.median(ref[k][jnd & (ref["param"] == "attack")])),
+                         release=float(np.median(ref[k][jnd & (ref["param"] == "release")])),
+                         both=float(np.median(ref[k][jnd]))) for k in dist_names}
+    if local:
+        lr = np.load(args.local_ref)
+        v, kd = lr[args.local], lr["kind"]
+        Dstar["local"] = dict(attack=float(np.median(v[kd == "attack"])),
+                              release=float(np.median(v[kd == "release"])),
+                              both=float(np.median(v[np.isin(kd, ["attack", "release"])])))
     print("聞き分けの限界 D*（音量 ±25% の距離の中央値）")
     for k, v in Dstar.items():
         print(f"  {k:14s} attack {v['attack']:.4g}  release {v['release']:.4g}  両方 {v['both']:.4g}"
@@ -133,7 +154,7 @@ def main():
             g = lambda t: tf.gather(tf.constant(t) if isinstance(t, np.ndarray) else t, s)
             out[s] = synth_fast(g(b["theta_stat"]), g(b["theta_osc"]), g(b["gmk"]), g(sp), g(R), g(b["f0"]),
                                 T_OFF, N, SR, hs, hq, src_type=g(b["src_type"])).numpy()
-        return quantize(tf.constant(out), data.scale)
+        return tf.constant(out)
 
     def de(sp, R, styp, ms):
         """列 ms[j] の見かけの変調 d·e(n)（フレーム上）"""

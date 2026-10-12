@@ -88,11 +88,22 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--no_chorus", action="store_true",
                     help="コーラスを素通しにする（20 ms の遅延による櫛形フィルタが音程差を音色差に変えるかの確認用）")
-    ap.add_argument("--cents", default="", help="音程のずらし量（例: 0.1,0.5,2,20）")
+    ap.add_argument("--cents", default="", help="音程のずらし量（例: 0.1,0.5,2,20）。--cents none で音程を測らない")
+    ap.add_argument("--reps", default="mel,u1,u2,ex", help="測る表現（mel, u1, u2, ex）")
+    ap.add_argument("--gauss_ms", default="", help="パワーの平滑化のガウス窓（例: 32,64）")
+    ap.add_argument("--floors", default="", help="下限（例: 30,40）")
+    ap.add_argument("--out", default="", help="1 組ごとの距離を保存する .npz")
     args = ap.parse_args()
-    global CENTS
-    if args.cents:
+    global CENTS, GAUSS_MS, FLOORS, REPS
+    if args.cents == "none":
+        CENTS = []
+    elif args.cents:
         CENTS = [float(v) for v in args.cents.split(",")]
+    if args.gauss_ms:
+        GAUSS_MS = [int(v) for v in args.gauss_ms.split(",")]
+    if args.floors:
+        FLOORS = [int(v) for v in args.floors.split(",")]
+    REPS = args.reps.split(",")
     if args.no_chorus:
         import diff_synth_fast
         diff_synth_fast.chorus_fast = lambda x, rate, depth, feedback, sr: x
@@ -150,9 +161,12 @@ def main():
         # 聞こえ方の評価なので量子化しない（無音付近の量子化雑音が対数で強調されるのを避ける）
         xt = tf.constant(x)
         u1, u2, lm = resolved(xt)
-        mel = np.maximum(np.exp(lm.numpy()) - 1e-5, 0.0).transpose(0, 2, 1)      # [B,64,T] 振幅
-        return dict(phi=feat(xt).numpy(), u1=u1.numpy(), u2=u2.numpy(), mel=mel,
-                    ex=excitation(xt).numpy())
+        F = dict(phi=feat(xt).numpy(), u1=u1.numpy(), u2=u2.numpy())
+        if "mel" in REPS:
+            F["mel"] = np.maximum(np.exp(lm.numpy()) - 1e-5, 0.0).transpose(0, 2, 1)   # [B,64,T] 振幅
+        if "ex" in REPS:
+            F["ex"] = excitation(xt).numpy()
+        return F
 
     def take(F, ok):
         return {k: v[ok] for k, v in F.items()}
@@ -164,7 +178,7 @@ def main():
         # 下限にして対数 → 周波数（とチャネル）で平均したフレームごとの差を、時間方向に 上位 10% / 最大 でまとめる
         hop_ms = {"mel": 16.0, "u1": 8.0, "u2": 8.0}
         # 興奮パターン（パワー）: 時間方向に平滑化 → dB → 「どこか 1 か所で何 dB 変わったか」（Zwicker 型の判定）
-        for sg in (8, 16):
+        for sg in ((8, 16) if "ex" in REPS else ()):
             e0 = gauss_smooth(F0["ex"], sg / 4.0)
             e1 = gauss_smooth(F1["ex"], sg / 4.0)
             peak = e0.max(axis=(1, 2), keepdims=True)
@@ -175,7 +189,7 @@ def main():
                 out[f"ex/P{sg}ms/{L}dB/p99"] = np.percentile(dd.reshape(len(dd), -1), 99, axis=1)
                 out[f"ex/P{sg}ms/{L}dB/fmean"] = dd.mean(1).max(1)
         # パワー（振幅の 2 乗）をガウス窓で平滑化 → 干渉の成分が打ち消し合う。振幅の次元に戻して比べる
-        for name in ("mel", "u1", "u2"):
+        for name in [r for r in ("mel", "u1", "u2") if r in REPS]:
             for sg in GAUSS_MS:
                 s = sg / hop_ms[name]
                 b0 = np.sqrt(gauss_smooth(F0[name] ** 2, s))
@@ -243,8 +257,13 @@ def main():
     kind = np.array([r[0] for r in rows]); mag = np.array([r[1] for r in rows], float)
     names = list(rows[0][2])
 
+    if args.out:
+        np.savez(args.out, kind=kind, mag=mag, **{k: np.array([r[2][k] for r in rows]) for k in names})
+
     def crossing(vals, mags, target):
         """距離の中央値が target に等しくなる大きさ（対数軸で補間）"""
+        if len(vals) == 0:
+            return "-"
         v = np.maximum.accumulate(np.array(vals))
         if v[0] >= target:
             return f"<{mags[0]:g}"

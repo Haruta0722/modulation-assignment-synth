@@ -56,12 +56,17 @@ def main():
     ap.add_argument("--calib", default="calibrate_dest.npz",
                     help="カンマ区切りで複数。後のファイルにある変調先は後の値で上書き（細かく測り直したもの）")
     ap.add_argument("--dist", default="jtfs_pnp_rel")
+    ap.add_argument("--fin_cents", type=float, default=0.0,
+                    help="> 0 なら fin1・fin2 の許容誤差を物差しを通さずセントで決める（fin は −100〜100 セントが 0〜1 なので τ = セント / 200）")
     args = ap.parse_args()
 
     tl = None
     for path in args.calib.split(","):
         Dstar, t2 = taus(np.load(path), args.dist)
         tl = t2 if tl is None else [b if not np.isnan(b[0]) else a for a, b in zip(tl, t2)]
+    if args.fin_cents > 0:
+        for m in (NAMES.index("fin1"), NAMES.index("fin2")):
+            tl[m] = (args.fin_cents / 200.0, "セント指定 ")
     tau = np.array([t for t, _ in tl])
     print(f"距離 {args.dist}、D* = {Dstar:.4g}")
     print("τ_m: " + ", ".join(f"{NAMES[m]} {n}{t:.3f}" for m, (t, n) in enumerate(tl)))
