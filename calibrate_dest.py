@@ -57,7 +57,16 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="calibrate_dest.npz")
+    ap.add_argument("--dests", default="", help="変調先の番号を絞る（例: 2,3,4,7,10）")
+    ap.add_argument("--depths", default="", help="深さの誤差（例: 0.003,0.006,0.012,0.025）")
+    ap.add_argument("--sigmas", default="", help="ENV の割合の雑音（例: 0.005,0.01,0.02,0.04）")
     args = ap.parse_args()
+    global DEPTHS, SIGMAS
+    if args.depths:
+        DEPTHS = [float(v) for v in args.depths.split(",")]
+    if args.sigmas:
+        SIGMAS = [float(v) for v in args.sigmas.split(",")]
+    dests = [int(v) for v in args.dests.split(",")] if args.dests else list(range(M))
     rng = np.random.default_rng(args.seed)
 
     data = T.Data(args.data)
@@ -100,7 +109,7 @@ def main():
     pool = np.concatenate([data.splits[s] for s in args.splits.split(",")])
     pool = pool[rng.permutation(len(pool))]
     pairs = []                                       # (データの通し番号, m, k, 単独でつながるか)
-    for m in range(M):
+    for m in dests:
         cnt = 0
         for i in pool:
             z = P["z"][i].astype(int)
