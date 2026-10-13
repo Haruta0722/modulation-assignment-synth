@@ -61,6 +61,8 @@ def parse_args():
                     help="single のときのみ使用")
     ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
                     help="single のときのみ使用。学習時と同じものを指定する")
+    ap.add_argument("--lfo_read", type=str, default=None, choices=["trunk", "pool", "ends"],
+                    help="学習時と同じものを指定する（既定は単段 trunk、二段 pool）")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--hop", type=int, default=256)
     ap.add_argument("--temp_lo", type=float, default=0.3)
@@ -79,10 +81,13 @@ def main():
     fidx = np.minimum(np.arange(n_frames) * args.hop + 512, N - 1)
 
     if args.model == "two":
-        model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop)
+        lr_ = args.lfo_read or "pool"
+        W.check_config(args.ckpt_dir, dict(lfo_read=lr_))
+        model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop, lfo_read=lr_)
     else:
-        W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act))
-        model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act)
+        lr_ = args.lfo_read or "trunk"
+        W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=lr_))
+        model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=lr_)
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
 
     W.load(model, W.latest(args.ckpt_dir))

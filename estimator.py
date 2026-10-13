@@ -62,9 +62,10 @@ ACTIVATIONS = {"relu": "relu", "leaky": leaky_relu}
 
 
 class Estimator(tf.keras.Model):
-    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu"):
+    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu", lfo_read="trunk"):
         super().__init__()
         self.sr, self.t_off, self.arch, self.act = sr, t_off, arch, act
+        self.lfo_read = lfo_read                  # "ends": LFO のヘッドだけ BiGRU の両端の状態から読む（v2〜v4）
         a = ACTIVATIONS[act]                      # 畳み込み・時間方向の畳み込み・trunk の活性化関数
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
         if arch in ("v2", "v3", "v4"):
@@ -88,6 +89,10 @@ class Estimator(tf.keras.Model):
                           for c in (32, 64, 128)]
             self.gap = tf.keras.layers.GlobalAveragePooling2D()
         self.trunk = tf.keras.layers.Dense(256, activation=a)
+        if lfo_read == "ends":
+            # 実験 37: 時間方向に平均してから位相を出すと、崩れた入力からは位相を学べない。
+            # 順方向の最後の状態と逆方向の最後の状態（= 時刻 0 の位置）を、LFO 専用の層に通す
+            self.lfo_trunk = tf.keras.layers.Dense(256, activation=a)
         d = tf.keras.layers.Dense
         self.h_env = d(K * 5)
         self.h_lfo = d(K * 4)
@@ -98,6 +103,11 @@ class Estimator(tf.keras.Model):
         self.h_static = d(3)
 
     def encode(self, x, f0, training=False):
+        return self._encode(x, f0, training)[0]
+
+    def _encode(self, x, f0, training=False):
+        """→ (trunk の出力, LFO 専用の特徴 or None)"""
+        ends = None
         S = tf.abs(tf.signal.stft(x, 1024, 256, fft_length=1024))     # [B,T,513]
         mel = tf.math.log(tf.matmul(S, self.mel_mat) + 1e-5)          # [B,T,64]
         h = mel[..., None]
@@ -107,6 +117,8 @@ class Estimator(tf.keras.Model):
             B = tf.shape(h)[0]
             h = tf.reshape(h, [B, -1, h.shape[2] * h.shape[3]])       # [B,T',F'·C]
             g = self.bigru(h)                                          # [B,T',256]
+            if self.lfo_read == "ends":
+                ends = self.lfo_trunk(tf.concat([g[:, -1, :128], g[:, 0, 128:]], -1))
             parts = []
             if self.arch in ("v2", "v4"):                              # 音全体の平均
                 w = tf.nn.softmax(self.att(g), axis=1)
@@ -121,11 +133,13 @@ class Estimator(tf.keras.Model):
         else:
             h = self.gap(h)
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
-        return self.trunk(tf.concat([h, f0n], axis=-1))
+        return self.trunk(tf.concat([h, f0n], axis=-1)), ends
 
     def call(self, x, f0, temp=1.0, hard=True, noise=True, training=False):
         B = tf.shape(x)[0]
-        h = self.encode(x, f0, training=training)
+        h, h_l = self._encode(x, f0, training=training)
+        if h_l is None:
+            h_l = h
         # --- ENV（割合パラメータ化） ---
         ue = tf.sigmoid(tf.reshape(self.h_env(h), [B, K, 5]))
         a = tf.maximum(ue[..., 0] * self.t_off, 1e-3)
@@ -135,7 +149,7 @@ class Estimator(tf.keras.Model):
         r = ue[..., 4] * R_MAX + 1e-3
         p_env = tf.stack([a, hh, dd, s, r], axis=-1)                  # [B,K,5]
         # --- LFO（rate 対数 / 位相は (cos,sin) → 円環復元） ---
-        ul = tf.reshape(self.h_lfo(h), [B, K, 4])
+        ul = tf.reshape(self.h_lfo(h_l), [B, K, 4])
         rate = 0.1 * tf.pow(100.0, tf.sigmoid(ul[..., 0]))
         phase = tf.math.floormod(tf.atan2(ul[..., 2], ul[..., 1]) / (2 * np.pi), 1.0)
         morph = tf.sigmoid(ul[..., 3])

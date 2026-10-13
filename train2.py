@@ -64,6 +64,10 @@ def parse_args():
     ap.add_argument("--env_w", type=str, default="1,1,1,1,1",
                     help="--env_frac 時の ENV の項ごとの重み（attack,hold,decay,sustain,release）")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--lfo_read", type=str, default="pool", choices=["pool", "ends"],
+                    help="ends: Stage 2 の LFO だけ BiGRU の両端の状態から読む（実験 38）")
+    ap.add_argument("--s2_stopgrad", action="store_true",
+                    help="Stage 2 の損失の勾配を Stage 1 に流さない（実験 38）")
     return ap.parse_args()
 
 
@@ -90,7 +94,10 @@ def main():
     n_frames = 1 + (N - 1024) // args.hop
     fidx = np.minimum(np.arange(n_frames) * args.hop + 512, N - 1)
 
-    model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop)
+    W.check_config(args.ckpt_dir, dict(lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad),
+                   write=not args.eval_only)
+    model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop,
+                                 lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad)
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)
     step_var = tf.Variable(0, dtype=tf.int64)

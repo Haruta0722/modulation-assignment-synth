@@ -66,12 +66,16 @@ class Stage1Traj(tf.keras.Model):
 class Stage2Param(tf.keras.Model):
     """軌跡 → ENV/LFO パラメータ ＋ 型。音は見ない。K 本に同一重みを適用。"""
 
-    def __init__(self, t_off=1.0):
+    def __init__(self, t_off=1.0, lfo_read="pool"):
         super().__init__()
-        self.t_off = t_off
+        self.t_off, self.lfo_read = t_off, lfo_read
         self.gru = tf.keras.layers.Bidirectional(
             tf.keras.layers.GRU(64, return_sequences=True))
         self.pool = tf.keras.layers.Dense(128, activation="relu")
+        if lfo_read == "ends":
+            # 実験 37: 崩れた軌跡からは、時間方向に平均・最大でまとめると位相を学べない。
+            # LFO だけ、順方向の最後の状態と逆方向の最後の状態（= 時刻 0 の位置）から読む
+            self.pool_lfo = tf.keras.layers.Dense(128, activation="relu")
         self.h_env = tf.keras.layers.Dense(5)
         self.h_lfo = tf.keras.layers.Dense(4)
         self.h_type = tf.keras.layers.Dense(2)
@@ -89,7 +93,10 @@ class Stage2Param(tf.keras.Model):
         dd = tf.maximum(ue[:, 2] * (self.t_off - a - hh), 1e-3)
         p_env = tf.stack([a, hh, dd, ue[:, 3], ue[:, 4] * R_MAX + 1e-3], -1)
 
-        ul = self.h_lfo(g)
+        if self.lfo_read == "ends":
+            ul = self.h_lfo(self.pool_lfo(tf.concat([h[:, -1, :64], h[:, 0, 64:]], -1)))
+        else:
+            ul = self.h_lfo(g)
         rate = 0.1 * tf.pow(100.0, tf.sigmoid(ul[:, 0]))     # [0.1,10] Hz
         phase = tf.math.floormod(
             tf.atan2(ul[:, 2], ul[:, 1]) / (2 * np.pi), 1.0)
@@ -112,11 +119,12 @@ class TwoStageEstimator(tf.keras.Model):
     Stage 1/2 が ENV/LFO パラメータと型を担い、
     ゲート・深さ・静的値は音から直接推定する（従来と同一）。"""
 
-    def __init__(self, sr=16000, t_off=1.0, hop=256):
+    def __init__(self, sr=16000, t_off=1.0, hop=256, lfo_read="pool", s2_stopgrad=False):
         super().__init__()
         self.sr, self.t_off, self.hop = sr, t_off, hop
+        self.s2_stopgrad = s2_stopgrad    # True: Stage 2 の損失の勾配を Stage 1 に流さない
         self.stage1 = Stage1Traj(sr, hop)
-        self.stage2 = Stage2Param(t_off)
+        self.stage2 = Stage2Param(t_off, lfo_read)
         # ゲート・深さ・静的値用の符号化器（時間方向を要約）
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr,
                                                              30.0, 7800.0)
@@ -151,7 +159,8 @@ class TwoStageEstimator(tf.keras.Model):
         # --- 二段: 軌跡 → パラメータ ---
         traj = self.stage1(x, f0)                             # [B,K,T]
         src_params, type_logits, type_oh = self.stage2(
-            traj, temp=temp, hard=hard, noise=noise)
+            tf.stop_gradient(traj) if self.s2_stopgrad else traj,
+            temp=temp, hard=hard, noise=noise)
         # --- 従来どおりのヘッド ---
         h = self.encode(x, f0)
         gate_logits = tf.reshape(self.h_gate(h), [B, M, K + 1])
