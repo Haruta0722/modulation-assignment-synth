@@ -17,10 +17,22 @@ diff_synth_tf.py — フェーズ1 定式化仕様書 v5 に基づく微分可�
   - すべて float32。
 """
 
+import os
+
 import numpy as np
 import tensorflow as tf
 
-K_ENVS = 4
+# ソースの枠の並び（実験 41）。環境変数 MOD_LAYOUT で切り替える
+#   mixed: 型（ENV / LFO）が混在する 4 枠。正準順序は「使用中の ENV を attack 順 → 使用中の LFO をレート順」（従来）
+#   typed: ENV 4 枠 ＋ LFO 3 枠に型を固定。LFO の枠の位置が ENV の本数に左右されない（実シンセの構成に近い）
+#          データセット（4 ソース、型は混在）は読み込み時に並べ替える（train.Data）
+LAYOUT = os.environ.get("MOD_LAYOUT", "mixed")
+if LAYOUT not in ("mixed", "typed"):
+    raise ValueError(f"MOD_LAYOUT={LAYOUT}（mixed か typed）")
+K_ENV_SLOTS, K_LFO_SLOTS = 4, 3
+K_ENVS = 4 if LAYOUT == "mixed" else K_ENV_SLOTS + K_LFO_SLOTS
+SLOT_TYPE = (None if LAYOUT == "mixed"                                   # 枠ごとの型（1=ENV, 0=LFO）
+             else np.array([1.0] * K_ENV_SLOTS + [0.0] * K_LFO_SLOTS, np.float32))
 M_DEST = 17
 BETA_CLAMP = 10.0
 

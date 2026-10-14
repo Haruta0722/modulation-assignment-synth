@@ -31,7 +31,7 @@ import tensorflow as tf
 
 import diff_synth_tf as ds
 from diff_synth_fast import synth_fast
-from estimator import (K, M, PERMS, R_MAX, F0_LO, gumbel_st,
+from estimator import (K, M, PERMS, R_MAX, F0_LO, gumbel_st, fixed_type,
                        gather_rows, SLOT_SCALE_ENV, teacher_R, none_depth_loss, env_frac)
 
 
@@ -122,8 +122,11 @@ class Stage2Param(tf.keras.Model):
         z = tf.zeros_like(rate)
         p_lfo = tf.stack([rate, phase, tf.sigmoid(ul[:, 3]), z, z], -1)
 
-        tl = self.h_type(g)                                   # [B*K,2] class0=ENV
-        t_oh = gumbel_st(tl, temp, hard, noise)
+        if ds.SLOT_TYPE is not None:                          # typed: 型は枠で決まる（実験 41）
+            t_oh, tl = (tf.reshape(a, [-1, 2]) for a in fixed_type(B))
+        else:
+            tl = self.h_type(g)                               # [B*K,2] class0=ENV
+            t_oh = gumbel_st(tl, temp, hard, noise)
         w = t_oh[:, 0:1]
         p = w[..., None] * p_env[:, None] + (1 - w[..., None]) * p_lfo[:, None]
         p = p[:, 0]                                           # [B*K,5]

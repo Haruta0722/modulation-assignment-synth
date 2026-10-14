@@ -118,6 +118,34 @@ class Data:
         self.P["z"] = np.where(
             z >= 0, np.take_along_axis(inv, np.maximum(z, 0), axis=1), -1
         ).astype(np.int8)
+        if ds.LAYOUT == "typed":
+            self._to_typed()
+
+    def _to_typed(self):
+        """実験 41: 型が混在する 4 枠 → ENV 4 枠 ＋ LFO 3 枠（型を枠に固定）。
+        正準順序で並べた後なので、型ごとに見ると「使用中を先頭、ENV は attack 順、LFO はレート順」になっている。
+        その順番のまま ENV は 0〜3、LFO は 4〜6 の枠へ入れる。空いた枠は未使用（R = 0、仮のパラメータ）"""
+        styp = self.P["src_type"]                                  # [n,4] 1=ENV
+        n, k_old = styp.shape
+        is_env = styp == 1.0
+        env_rank = np.cumsum(is_env, axis=1) - 1
+        lfo_rank = np.cumsum(~is_env, axis=1) - 1
+        new_idx = np.where(is_env, env_rank, ds.K_ENV_SLOTS + lfo_rank)   # 旧枠 → 新しい枠
+        assert env_rank[is_env].max() < ds.K_ENV_SLOTS and lfo_rank[~is_env].max() < ds.K_LFO_SLOTS, \
+            "ENV が 4 本、LFO が 3 本を超える音がある"
+        Kn = ds.K_ENVS
+        sp = np.empty((n, Kn, 5), np.float32)
+        sp[:, :ds.K_ENV_SLOTS] = [0.01, 0.0, 0.1, 1.0, 0.1]        # 仮の ENV（未使用の枠）
+        sp[:, ds.K_ENV_SLOTS:] = [1.0, 0.0, 0.5, 0.0, 0.0]         # 仮の LFO（未使用の枠）
+        R = np.zeros((n, Kn, self.P["R"].shape[2]), np.float32)
+        ar = np.arange(n)[:, None]
+        sp[ar, new_idx] = self.P["src_params"]
+        R[ar, new_idx] = self.P["R"]
+        z = self.P["z"].astype(np.int64)
+        self.P["z"] = np.where(z >= 0, np.take_along_axis(new_idx, np.maximum(z, 0), axis=1),
+                               -1).astype(np.int8)
+        self.P["src_params"], self.P["R"] = sp, R
+        self.P["src_type"] = np.tile(ds.SLOT_TYPE, (n, 1))
 
     def batch(self, idx):
         x = tf.constant(self.wav[idx].astype(np.float32) / self.scale)
@@ -332,7 +360,8 @@ def main():
     fmax = E.F0_LO * 2 ** (100 / 1200)
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
 
-    W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=args.lfo_read),
+    W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=args.lfo_read,
+                                       layout=ds.LAYOUT),
                    write=not args.eval_only)
     model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=args.lfo_read)
     # v8.4: GRU 等の遅延構築レイヤをチェックポイント復元前にビルドしておく

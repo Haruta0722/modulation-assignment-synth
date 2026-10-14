@@ -47,8 +47,9 @@ class Dump:
         self.used = d["used"]
         self.margin = d["gate_margin"] if "gate_margin" in d else None
         self.B = len(self.idx)
+        self.K = self.used.shape[1]               # 枠の数（mixed 4 / typed 7、実験 41）。z_pred == K が「なし」
         self.true_on = self.z_true >= 0
-        self.pred_on = self.z_pred < K
+        self.pred_on = self.z_pred < self.K
         self.hit = self.true_on & self.pred_on & (self.z_true == self.z_pred)
 
     def cols(self, mask):

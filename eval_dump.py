@@ -85,7 +85,7 @@ def main():
     oracle = None if args.oracle == "none" else args.oracle
     if args.model == "two":
         lr_ = args.lfo_read or "pool"
-        W.check_config(args.ckpt_dir, dict(lfo_read=lr_, oracle=args.oracle))
+        W.check_config(args.ckpt_dir, dict(lfo_read=lr_, oracle=args.oracle, layout=ds.LAYOUT))
         model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop, lfo_read=lr_, oracle=oracle)
         okw = lambda b: dict(slot_info=E2.slot_oracle(b, oracle) if oracle else None)
         model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True,
@@ -94,7 +94,7 @@ def main():
         if oracle:
             raise SystemExit("--oracle は二段のみ")
         lr_ = args.lfo_read or "trunk"
-        W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=lr_))
+        W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=lr_, layout=ds.LAYOUT))
         model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=lr_)
         okw = lambda b: {}
         model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)

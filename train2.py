@@ -97,7 +97,7 @@ def main():
     n_frames = 1 + (N - 1024) // args.hop
     fidx = np.minimum(np.arange(n_frames) * args.hop + 512, N - 1)
 
-    W.check_config(args.ckpt_dir, dict(lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad,
+    W.check_config(args.ckpt_dir, dict(lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad, layout=ds.LAYOUT,
                                        oracle=args.oracle), write=not args.eval_only)
     oracle = None if args.oracle == "none" else args.oracle
     model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop, lfo_read=args.lfo_read,

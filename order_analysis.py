@@ -36,6 +36,8 @@ def load(path):
 
 def wiring_pi(z_pred, z_true, pred_on):
     """一致する配線の数が最大の π（予測 k → 真 π[k]）。同点なら恒等（PERMS の先頭）"""
+    if z_true.max() >= K:
+        raise ValueError("枠が 4 より多い dump（typed、実験 41）には未対応")
     zp = np.minimum(z_pred, K - 1)
     match = (PERMS[:, zp] == z_true[None]) & pred_on[None]            # [24,B,M]
     return PERMS[np.argmax(match.sum(-1), axis=0)]                     # [B,K]

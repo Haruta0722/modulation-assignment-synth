@@ -53,6 +53,13 @@ def gumbel_st(logits, temp=1.0, hard=True, noise=True):
     return y
 
 
+def fixed_type(B):
+    """typed の枠並び（実験 41）: 枠ごとに決まった型の one-hot [B,K,2]（class0=ENV）と、それに合う大きなロジット"""
+    st = tf.constant(ds.SLOT_TYPE)
+    oh = tf.tile(tf.stack([st, 1.0 - st], -1)[None], [B, 1, 1])
+    return oh, 20.0 * (2.0 * oh - 1.0)
+
+
 def leaky_relu(x):
     """負の入力にも傾き 0.01 を残す ReLU（働かなくなったユニットにも勾配が届く）"""
     return tf.nn.leaky_relu(x, alpha=0.01)
@@ -156,8 +163,11 @@ class Estimator(tf.keras.Model):
         zeros = tf.zeros_like(rate)
         p_lfo = tf.stack([rate, phase, morph, zeros, zeros], axis=-1)
         # --- タイプ（ST-Gumbel: forward one-hot → パラメータ選択が厳密） ---
-        type_logits = tf.reshape(self.h_type(h), [B, K, 2])           # class0=ENV
-        type_oh = gumbel_st(type_logits, temp, hard, noise)
+        if ds.SLOT_TYPE is not None:                                  # typed: 型は枠で決まる（実験 41）
+            type_oh, type_logits = fixed_type(B)
+        else:
+            type_logits = tf.reshape(self.h_type(h), [B, K, 2])       # class0=ENV
+            type_oh = gumbel_st(type_logits, temp, hard, noise)
         w_env = type_oh[..., 0]                                       # [B,K]
         src_params = w_env[..., None] * p_env + (1 - w_env[..., None]) * p_lfo
         # --- ゲート・深さ ---

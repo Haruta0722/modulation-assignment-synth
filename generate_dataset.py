@@ -34,6 +34,7 @@ import tensorflow as tf
 import diff_synth_tf as ds
 from diff_synth_fast import synth_fast
 
+assert ds.LAYOUT == "mixed", "データセットは型が混在する 4 ソースで生成する（typed は読み込み時に並べ替える）"
 K, M = ds.K_ENVS, ds.M_DEST
 MIDI_SET = np.array([36, 48, 60, 72, 84], np.int16)
 J_MAX = 6

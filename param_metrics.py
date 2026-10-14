@@ -61,7 +61,7 @@ def pairs(D, match):
     out = {}
     b, m = np.nonzero(D.hit)
     out["depth"] = ("lin", D.d_true[b, m], D.d_pred[b, m], None)
-    pi = (np.tile(np.arange(K), (D.B, 1)) if match == "ident"
+    pi = (np.tile(np.arange(D.K), (D.B, 1)) if match == "ident"
           else O.wiring_pi(D.z_pred, D.z_true, D.pred_on))
     inv = np.argsort(pi, axis=1)                                      # 真 t → 予測の枠
     bb, tt = np.nonzero(D.used)
