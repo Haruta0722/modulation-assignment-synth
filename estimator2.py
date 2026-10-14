@@ -50,7 +50,7 @@ class Stage1Traj(tf.keras.Model):
             tf.keras.layers.GRU(128, return_sequences=True))
         self.head = tf.keras.layers.Dense(n_src)      # K 本まとめて出力
 
-    def call(self, x, f0):
+    def call(self, x, f0, slot_info=None):
         S = tf.abs(tf.signal.stft(x, 1024, self.hop, fft_length=1024))
         h = tf.math.log(tf.matmul(S, self.mel_mat) + 1e-5)[..., None]
         for c in self.convs:
@@ -59,8 +59,27 @@ class Stage1Traj(tf.keras.Model):
         h = tf.reshape(h, [B, T, h.shape[2] * h.shape[3]])
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)
         h = tf.concat([h, f0n[:, None, :] * tf.ones([1, T, 1])], -1)
+        if slot_info is not None:                      # 実験 40: 正解の枠の情報（診断用）
+            h = tf.concat([h, slot_info[:, None, :] * tf.ones([1, T, 1])], -1)
         y = tf.sigmoid(self.head(self.bigru(h)))       # [B,T,K]
         return tf.transpose(y, [0, 2, 1])              # [B,K,T]
+
+
+ORACLE_DIM = {"type": 2 * K, "route": 2 * K + K * M}
+
+
+def slot_oracle(batch, kind):
+    """実験 40（診断用）: Stage 1 に答えとして渡す、正準順序の各枠の情報。
+    type : 各枠が ENV か LFO か（使われていない枠は両方 0）            → [B, 2K]
+    route: type ＋ 各枠がどの変調先につながっているか（0/1、K × M）  → [B, 2K + K·M]"""
+    z = tf.cast(batch["z"], tf.int32)                                          # [B,M]（-1 = なし）
+    route = tf.cast(tf.equal(z[:, None, :], tf.range(K, dtype=tf.int32)[None, :, None]),
+                    tf.float32)                                                # [B,K,M]
+    used = tf.reduce_max(route, axis=-1)                                       # [B,K]
+    feats = [batch["src_type"] * used, (1.0 - batch["src_type"]) * used]
+    if kind == "route":
+        feats.append(tf.reshape(route, [tf.shape(z)[0], K * M]))
+    return tf.concat(feats, -1)
 
 
 class Stage2Param(tf.keras.Model):
@@ -119,10 +138,12 @@ class TwoStageEstimator(tf.keras.Model):
     Stage 1/2 が ENV/LFO パラメータと型を担い、
     ゲート・深さ・静的値は音から直接推定する（従来と同一）。"""
 
-    def __init__(self, sr=16000, t_off=1.0, hop=256, lfo_read="pool", s2_stopgrad=False):
+    def __init__(self, sr=16000, t_off=1.0, hop=256, lfo_read="pool", s2_stopgrad=False,
+                 oracle=None):
         super().__init__()
         self.sr, self.t_off, self.hop = sr, t_off, hop
         self.s2_stopgrad = s2_stopgrad    # True: Stage 2 の損失の勾配を Stage 1 に流さない
+        self.oracle = oracle              # None / "type" / "route": Stage 1 に正解の枠の情報を渡す（診断用）
         self.stage1 = Stage1Traj(sr, hop)
         self.stage2 = Stage2Param(t_off, lfo_read)
         # ゲート・深さ・静的値用の符号化器（時間方向を要約）
@@ -154,10 +175,16 @@ class TwoStageEstimator(tf.keras.Model):
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)
         return self.trunk(tf.concat([h, f0n], -1))
 
-    def call(self, x, f0, temp=1.0, hard=True, noise=True):
+    def dummy_slot_info(self, B):
+        """重みを作るための呼び出し用（中身は使わない）"""
+        return tf.zeros([B, ORACLE_DIM[self.oracle]]) if self.oracle else None
+
+    def call(self, x, f0, temp=1.0, hard=True, noise=True, slot_info=None):
         B = tf.shape(x)[0]
+        if (slot_info is None) != (self.oracle is None):
+            raise ValueError(f"oracle={self.oracle} なのに slot_info の有無が合わない")
         # --- 二段: 軌跡 → パラメータ ---
-        traj = self.stage1(x, f0)                             # [B,K,T]
+        traj = self.stage1(x, f0, slot_info)                  # [B,K,T]
         src_params, type_logits, type_oh = self.stage2(
             tf.stop_gradient(traj) if self.s2_stopgrad else traj,
             temp=temp, hard=hard, noise=noise)

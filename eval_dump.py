@@ -63,6 +63,8 @@ def parse_args():
                     help="single のときのみ使用。学習時と同じものを指定する")
     ap.add_argument("--lfo_read", type=str, default=None, choices=["trunk", "pool", "ends"],
                     help="学習時と同じものを指定する（既定は単段 trunk、二段 pool）")
+    ap.add_argument("--oracle", type=str, default="none", choices=["none", "type", "route"],
+                    help="二段のみ。学習時と同じものを指定する（実験 40）")
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--hop", type=int, default=256)
     ap.add_argument("--temp_lo", type=float, default=0.3)
@@ -80,15 +82,22 @@ def main():
     n_frames = 1 + (N - 1024) // args.hop
     fidx = np.minimum(np.arange(n_frames) * args.hop + 512, N - 1)
 
+    oracle = None if args.oracle == "none" else args.oracle
     if args.model == "two":
         lr_ = args.lfo_read or "pool"
-        W.check_config(args.ckpt_dir, dict(lfo_read=lr_))
-        model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop, lfo_read=lr_)
+        W.check_config(args.ckpt_dir, dict(lfo_read=lr_, oracle=args.oracle))
+        model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop, lfo_read=lr_, oracle=oracle)
+        okw = lambda b: dict(slot_info=E2.slot_oracle(b, oracle) if oracle else None)
+        model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True,
+              slot_info=model.dummy_slot_info(1))
     else:
+        if oracle:
+            raise SystemExit("--oracle は二段のみ")
         lr_ = args.lfo_read or "trunk"
         W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=lr_))
         model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=lr_)
-    model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
+        okw = lambda b: {}
+        model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
 
     W.load(model, W.latest(args.ckpt_dir))
 
@@ -104,7 +113,7 @@ def main():
     for s0 in range(0, len(idx_all), args.batch):
         idx = idx_all[s0:s0 + args.batch]          # 端数はそのまま（水増ししない）
         x, batch = data.batch(idx)
-        pred = model(x, batch["f0"], temp=args.temp_lo, hard=True, noise=False)
+        pred = model(x, batch["f0"], temp=args.temp_lo, hard=True, noise=False, **okw(batch))
 
         z = batch["z"].numpy()                                        # [B,M]
         g_pred = tf.argmax(pred["gate_logits"], -1,

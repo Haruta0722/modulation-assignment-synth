@@ -68,6 +68,9 @@ def parse_args():
                     help="ends: Stage 2 の LFO だけ BiGRU の両端の状態から読む（実験 38）")
     ap.add_argument("--s2_stopgrad", action="store_true",
                     help="Stage 2 の損失の勾配を Stage 1 に流さない（実験 38）")
+    ap.add_argument("--oracle", type=str, default="none", choices=["none", "type", "route"],
+                    help="診断用: Stage 1 に正解の枠の情報を渡す。type = 各枠の型と使用の有無、"
+                         "route = それに加えて各枠の変調先（実験 40）")
     return ap.parse_args()
 
 
@@ -94,11 +97,16 @@ def main():
     n_frames = 1 + (N - 1024) // args.hop
     fidx = np.minimum(np.arange(n_frames) * args.hop + 512, N - 1)
 
-    W.check_config(args.ckpt_dir, dict(lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad),
-                   write=not args.eval_only)
-    model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop,
-                                 lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad)
-    model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
+    W.check_config(args.ckpt_dir, dict(lfo_read=args.lfo_read, s2_stopgrad=args.s2_stopgrad,
+                                       oracle=args.oracle), write=not args.eval_only)
+    oracle = None if args.oracle == "none" else args.oracle
+    model = E2.TwoStageEstimator(sr=SR, t_off=T_OFF, hop=args.hop, lfo_read=args.lfo_read,
+                                 s2_stopgrad=args.s2_stopgrad, oracle=oracle)
+    model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True,
+          slot_info=model.dummy_slot_info(1))
+
+    def slot_info(batch):
+        return E2.slot_oracle(batch, oracle) if oracle else None
     opt = tf.keras.optimizers.Adam(args.lr)
     step_var = tf.Variable(0, dtype=tf.int64)
     # 重みの正本は weights_io（.weights.h5）。tf.train.Checkpoint は opt と step の再開用
@@ -126,7 +134,7 @@ def main():
     @tf.function(reduce_retracing=True)
     def train_step(x, batch, temp):
         with tf.GradientTape() as tape:
-            pred = model(x, batch["f0"], temp=temp, hard=True)
+            pred = model(x, batch["f0"], temp=temp, hard=True, slot_info=slot_info(batch))
             total, parts, _ = E2.losses2(pred, batch, x, SR, T_OFF, NH,
                                          LAM, args.hop)
         grads = tape.gradient(total, model.trainable_variables)
@@ -151,7 +159,7 @@ def main():
             idx = idx_all[s0:s0 + args.batch]
             x, batch = data.batch(idx)
             pred = model(x, batch["f0"], temp=args.temp_lo, hard=True,
-                         noise=False)   # 評価は決定的に
+                         noise=False, slot_info=slot_info(batch))   # 評価は決定的に
             total, parts, mapping = E2.losses2(pred, batch, x, SR, T_OFF, NH,
                                                LAM, args.hop)
             m = T1.metrics_np(pred, batch, mapping, SR, T_OFF, N)
