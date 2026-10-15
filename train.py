@@ -62,8 +62,9 @@ def parse_args():
     ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"])
     ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
                     help="畳み込み・時間方向の畳み込み・trunk の活性化関数")
-    ap.add_argument("--lfo_read", type=str, default="trunk", choices=["trunk", "ends"],
-                    help="ends: LFO のヘッドだけ BiGRU の両端の状態から読む（実験 38）")
+    ap.add_argument("--lfo_read", type=str, default="trunk", choices=["trunk", "ends", "mod"],
+                    help="ends: LFO のヘッドだけ BiGRU の両端の状態から読む（実験 38）。"
+                         "mod: LFO のヘッドに変調スペクトルの枝を加える（実験 42）")
     ap.add_argument("--spec_warm0", type=int, default=5000,
                     help="このステップまで λ_spec=0（教師あり項で離散構造を先に学習）")
     ap.add_argument("--spec_warmlen", type=int, default=5000,

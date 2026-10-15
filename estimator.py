@@ -53,6 +53,24 @@ def gumbel_st(logits, temp=1.0, hard=True, noise=True):
     return y
 
 
+MOD_NFFT, MOD_BINS, MOD_GROUP, MOD_CH = 512, 82, 4, 32
+
+
+def mod_spectrum(mel):
+    """変調スペクトル（実験 42）: 対数メル [B,T,64] の各帯域の時間変化を周波数分析 → [B,82,16]。
+    帯域ごとに時間平均を引いてハン窓をかけ、512 点に 0 を詰めてフーリエ変換した振幅。
+    62.5 コマ/秒なので 0.122 Hz 刻み。1〜82 段 = 0.12〜10.0 Hz（LFO のレートの範囲）を取り、
+    隣り合う 4 帯域ずつ平均して 16 組にし、log(1 + 振幅) にする"""
+    T = tf.shape(mel)[1]
+    x = mel - tf.reduce_mean(mel, axis=1, keepdims=True)
+    x = x * tf.signal.hann_window(T, periodic=False)[None, :, None]
+    spec = tf.abs(tf.signal.rfft(tf.transpose(x, [0, 2, 1]), fft_length=[MOD_NFFT]))   # [B,64,257]
+    spec = spec[:, :, 1:MOD_BINS + 1]                                                 # [B,64,82]
+    nb = mel.shape[2] // MOD_GROUP
+    spec = tf.reduce_mean(tf.reshape(spec, [-1, nb, MOD_GROUP, MOD_BINS]), axis=2)     # [B,16,82]
+    return tf.transpose(tf.math.log(1.0 + spec), [0, 2, 1])                          # [B,82,16]
+
+
 def fixed_type(B):
     """typed の枠並び（実験 41）: 枠ごとに決まった型の one-hot [B,K,2]（class0=ENV）と、それに合う大きなロジット"""
     st = tf.constant(ds.SLOT_TYPE)
@@ -73,6 +91,7 @@ class Estimator(tf.keras.Model):
         super().__init__()
         self.sr, self.t_off, self.arch, self.act = sr, t_off, arch, act
         self.lfo_read = lfo_read                  # "ends": LFO のヘッドだけ BiGRU の両端の状態から読む（v2〜v4）
+                                                  # "mod" : LFO のヘッドに変調スペクトルの枝を加える（実験 42）
         a = ACTIVATIONS[act]                      # 畳み込み・時間方向の畳み込み・trunk の活性化関数
         self.mel_mat = tf.signal.linear_to_mel_weight_matrix(64, 513, sr, 30.0, 7800.0)
         if arch in ("v2", "v3", "v4"):
@@ -100,6 +119,13 @@ class Estimator(tf.keras.Model):
             # 実験 37: 時間方向に平均してから位相を出すと、崩れた入力からは位相を学べない。
             # 順方向の最後の状態と逆方向の最後の状態（= 時刻 0 の位置）を、LFO 専用の層に通す
             self.lfo_trunk = tf.keras.layers.Dense(256, activation=a)
+        if lfo_read == "mod":
+            # 実験 42: LFO のレートを、変調スペクトル（各帯域の音量の揺れを時間方向に周波数分析したもの）の
+            # 山の位置から読む。揺れの速さの方向には縮めずに畳み込み、trunk の出力と合わせて LFO 専用の層に通す
+            self.mod_convs = [tf.keras.layers.Conv1D(MOD_CH, 5, padding="same", activation=a)
+                              for _ in range(2)]
+            self.mod_dense = tf.keras.layers.Dense(256, activation=a)
+            self.lfo_trunk = tf.keras.layers.Dense(256, activation=a)
         d = tf.keras.layers.Dense
         self.h_env = d(K * 5)
         self.h_lfo = d(K * 4)
@@ -117,6 +143,11 @@ class Estimator(tf.keras.Model):
         ends = None
         S = tf.abs(tf.signal.stft(x, 1024, 256, fft_length=1024))     # [B,T,513]
         mel = tf.math.log(tf.matmul(S, self.mel_mat) + 1e-5)          # [B,T,64]
+        if self.lfo_read == "mod":
+            m = mod_spectrum(mel)                                      # [B,82,16]
+            for c in self.mod_convs:
+                m = c(m)                                               # [B,82,32]
+            mod_feat = self.mod_dense(tf.reshape(m, [tf.shape(m)[0], MOD_BINS * MOD_CH]))
         h = mel[..., None]
         for c in self.convs:
             h = c(h)
@@ -140,7 +171,10 @@ class Estimator(tf.keras.Model):
         else:
             h = self.gap(h)
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
-        return self.trunk(tf.concat([h, f0n], axis=-1)), ends
+        out = self.trunk(tf.concat([h, f0n], axis=-1))
+        if self.lfo_read == "mod":
+            ends = self.lfo_trunk(tf.concat([out, mod_feat], axis=-1))
+        return out, ends
 
     def call(self, x, f0, temp=1.0, hard=True, noise=True, training=False):
         B = tf.shape(x)[0]

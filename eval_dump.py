@@ -61,7 +61,7 @@ def parse_args():
                     help="single のときのみ使用")
     ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
                     help="single のときのみ使用。学習時と同じものを指定する")
-    ap.add_argument("--lfo_read", type=str, default=None, choices=["trunk", "pool", "ends"],
+    ap.add_argument("--lfo_read", type=str, default=None, choices=["trunk", "pool", "ends", "mod"],
                     help="学習時と同じものを指定する（既定は単段 trunk、二段 pool）")
     ap.add_argument("--oracle", type=str, default="none", choices=["none", "type", "route"],
                     help="二段のみ。学習時と同じものを指定する（実験 40）")
