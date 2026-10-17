@@ -62,6 +62,8 @@ def parse_args():
     ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"])
     ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
                     help="畳み込み・時間方向の畳み込み・trunk の活性化関数")
+    ap.add_argument("--rate_head", type=str, default="reg", choices=["reg", "hlgauss"],
+                    help="hlgauss: LFO のレートを対数の 128 区間の分類で出す（実験 44）")
     ap.add_argument("--lfo_read", type=str, default="trunk", choices=["trunk", "ends", "mod"],
                     help="ends: LFO のヘッドだけ BiGRU の両端の状態から読む（実験 38）。"
                          "mod: LFO のヘッドに変調スペクトルの枝を加える（実験 42）")
@@ -362,9 +364,10 @@ def main():
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
 
     W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=args.lfo_read,
-                                       layout=ds.LAYOUT),
+                                       layout=ds.LAYOUT, rate_head=args.rate_head),
                    write=not args.eval_only)
-    model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=args.lfo_read)
+    model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=args.lfo_read,
+                        rate_head=args.rate_head)
     # v8.4: GRU 等の遅延構築レイヤをチェックポイント復元前にビルドしておく
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)

@@ -54,6 +54,28 @@ def gumbel_st(logits, temp=1.0, hard=True, noise=True):
 
 
 MOD_NFFT, MOD_BINS, MOD_GROUP, MOD_CH = 512, 82, 4, 32
+RATE_NB, RATE_SIG, RATE_WIN = 128, 0.75, 3       # レートの分類（実験 44）: 区間の数、正解のぼかし幅（区間）、読み出しの窓（±区間）
+
+
+def rate_from_logits(logits):
+    """HL-Gauss の分類（実験 44）→ レート [Hz]。対数レート 0.1〜10 Hz を 128 区間に分けた確率のうち、
+    確率が最大の区間の ±3 区間で重み付き平均を取る（区間の幅 約 3.7% より細かく読む）"""
+    p = tf.nn.softmax(logits, axis=-1)
+    j = tf.argmax(p, axis=-1, output_type=tf.int32)
+    ar = tf.range(RATE_NB, dtype=tf.int32)
+    w = p * tf.cast(tf.abs(ar - j[..., None]) <= RATE_WIN, tf.float32)
+    c = (tf.cast(ar, tf.float32) + 0.5) / RATE_NB
+    y = tf.reduce_sum(w * c, -1) / tf.maximum(tf.reduce_sum(w, -1), 1e-12)
+    return 0.1 * tf.pow(100.0, y)
+
+
+def hl_gauss_target(rate):
+    """正解のレート [Hz] → 128 区間の確率。正解の位置を中心に、幅 0.75 区間のガウスでぼかす（HL-Gauss）"""
+    y = tf.clip_by_value(tf.math.log(tf.maximum(rate, 1e-3) / 0.1) / np.log(100.0), 0.0, 1.0)
+    edges = tf.linspace(0.0, 1.0, RATE_NB + 1)
+    cdf = 0.5 * (1.0 + tf.math.erf((edges - y[..., None]) / (RATE_SIG / RATE_NB * np.sqrt(2.0))))
+    p = cdf[..., 1:] - cdf[..., :-1]
+    return p / tf.maximum(tf.reduce_sum(p, -1, keepdims=True), 1e-12)
 
 
 def mod_spectrum(mel):
@@ -87,9 +109,10 @@ ACTIVATIONS = {"relu": "relu", "leaky": leaky_relu}
 
 
 class Estimator(tf.keras.Model):
-    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu", lfo_read="trunk"):
+    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu", lfo_read="trunk", rate_head="reg"):
         super().__init__()
         self.sr, self.t_off, self.arch, self.act = sr, t_off, arch, act
+        self.rate_head = rate_head                # "reg": 対数レートの回帰（2 乗誤差） / "hlgauss": 区間の分類（実験 44）
         self.lfo_read = lfo_read                  # "ends": LFO のヘッドだけ BiGRU の両端の状態から読む（v2〜v4）
                                                   # "mod" : LFO のヘッドに変調スペクトルの枝を加える（実験 42）
         a = ACTIVATIONS[act]                      # 畳み込み・時間方向の畳み込み・trunk の活性化関数
@@ -129,6 +152,8 @@ class Estimator(tf.keras.Model):
         d = tf.keras.layers.Dense
         self.h_env = d(K * 5)
         self.h_lfo = d(K * 4)
+        if rate_head == "hlgauss":
+            self.h_rate = d(K * RATE_NB)
         self.h_type = d(K * 2)
         self.h_gate = d(M * (K + 1))
         self.h_depth = d(M)
@@ -191,7 +216,11 @@ class Estimator(tf.keras.Model):
         p_env = tf.stack([a, hh, dd, s, r], axis=-1)                  # [B,K,5]
         # --- LFO（rate 対数 / 位相は (cos,sin) → 円環復元） ---
         ul = tf.reshape(self.h_lfo(h_l), [B, K, 4])
-        rate = 0.1 * tf.pow(100.0, tf.sigmoid(ul[..., 0]))
+        if self.rate_head == "hlgauss":                               # 実験 44: レートは区間の分類で出す
+            rate_logits = tf.reshape(self.h_rate(h_l), [B, K, RATE_NB])
+            rate = rate_from_logits(rate_logits)
+        else:
+            rate = 0.1 * tf.pow(100.0, tf.sigmoid(ul[..., 0]))
         phase = tf.math.floormod(tf.atan2(ul[..., 2], ul[..., 1]) / (2 * np.pi), 1.0)
         morph = tf.sigmoid(ul[..., 3])
         zeros = tf.zeros_like(rate)
@@ -216,9 +245,12 @@ class Estimator(tf.keras.Model):
         theta = tf.concat([us[:, :2], f1[:, None], f2[:, None], us[:, 4:]], axis=1)
         # --- 静的のみ ---
         st = tf.sigmoid(self.h_static(h))
-        return dict(src_params=src_params, type_logits=type_logits, type_oh=type_oh,
-                    gate_logits=gate_logits, gate_oh=gate_oh, depth=depth,
-                    R=R_hat, theta_stat=theta, theta_osc=st[:, :2], gmk=st[:, 2])
+        out = dict(src_params=src_params, type_logits=type_logits, type_oh=type_oh,
+                   gate_logits=gate_logits, gate_oh=gate_oh, depth=depth,
+                   R=R_hat, theta_stat=theta, theta_osc=st[:, :2], gmk=st[:, 2])
+        if self.rate_head == "hlgauss":
+            out["rate_logits"] = rate_logits
+        return out
 
 
 # ---------------------------------------------------------------- 置換整合（S4 総当たり）
@@ -315,7 +347,13 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
     circ = tf.minimum(dphi, 1.0 - dphi)
     lr_n = (tf.math.log(tf.maximum(src_p[..., 0], 1e-3) / 0.1)
             - tf.math.log(tf.maximum(batch["src_params"][..., 0], 1e-3) / 0.1)) / np.log(100.0)
-    d_lfo = (wS[:, 0] * lr_n ** 2 + wS[:, 1] * circ ** 2
+    if "rate_logits" in pred:                                         # 実験 44: レートは HL-Gauss の交差エントロピー
+        r_term = tf.nn.softmax_cross_entropy_with_logits(
+            labels=hl_gauss_target(batch["src_params"][..., 0]),
+            logits=gather_rows(pred["rate_logits"], mapping))
+    else:
+        r_term = lr_n ** 2
+    d_lfo = (wS[:, 0] * r_term + wS[:, 1] * circ ** 2
              + wS[:, 2] * (src_p[..., 2] - batch["src_params"][..., 2]) ** 2)
     l_src = tf.reduce_sum(uf * (is_env * d_env + (1 - is_env) * d_lfo)) / nu
     l_param = l_stat + l_static + l_R + lam.get("src_w", 1.0) * l_src
