@@ -63,6 +63,7 @@ def parse_args():
                     help="single のときのみ使用。学習時と同じものを指定する")
     ap.add_argument("--lfo_read", type=str, default=None, choices=["trunk", "pool", "ends", "mod"],
                     help="学習時と同じものを指定する（既定は単段 trunk、二段 pool）")
+    ap.add_argument("--mod_phase", action="store_true", help="単段のみ。学習時と同じものを指定する（実験 46）")
     ap.add_argument("--rate_head", type=str, default="reg", choices=["reg", "hlgauss"],
                     help="単段のみ。学習時と同じものを指定する（実験 44）")
     ap.add_argument("--oracle", type=str, default="none", choices=["none", "type", "route"],
@@ -97,9 +98,9 @@ def main():
             raise SystemExit("--oracle は二段のみ")
         lr_ = args.lfo_read or "trunk"
         W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=lr_, layout=ds.LAYOUT,
-                                           rate_head=args.rate_head))
+                                           rate_head=args.rate_head, mod_phase=args.mod_phase))
         model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=lr_,
-                            rate_head=args.rate_head)
+                            rate_head=args.rate_head, mod_phase=args.mod_phase)
         okw = lambda b: {}
         model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
 

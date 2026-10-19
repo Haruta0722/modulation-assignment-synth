@@ -62,6 +62,12 @@ def parse_args():
     ap.add_argument("--arch", type=str, default="v2", choices=["v1", "v2", "v3", "v4"])
     ap.add_argument("--act", type=str, default="relu", choices=["relu", "leaky"],
                     help="畳み込み・時間方向の畳み込み・trunk の活性化関数")
+    ap.add_argument("--mod_phase", action="store_true",
+                    help="変調スペクトルに位相（実部・虚部）も加える（--lfo_read mod、実験 46）")
+    ap.add_argument("--rate_ce_stop", action="store_true",
+                    help="レートの分類の勾配だけ共有の層に流さない（--lfo_read mod --rate_head hlgauss、実験 46）")
+    ap.add_argument("--rate_aux", action="store_true",
+                    help="レートの回帰（2 乗誤差）を補助として加え、共有の層まで流す（--rate_head hlgauss、実験 46）")
     ap.add_argument("--lfo_grad", type=float, default=1.0,
                     help="LFO のヘッドの損失が共有の層へ流す勾配の倍率。0 で止める（実験 45）。予測には影響しない")
     ap.add_argument("--rate_head", type=str, default="reg", choices=["reg", "hlgauss"],
@@ -366,10 +372,13 @@ def main():
     NH = (int((SR / 2) // fmax), int(((SR / 2) / fmax - 1) // 2))
 
     W.check_config(args.ckpt_dir, dict(arch=args.arch, act=args.act, lfo_read=args.lfo_read,
-                                       layout=ds.LAYOUT, rate_head=args.rate_head, lfo_grad=args.lfo_grad),
+                                       layout=ds.LAYOUT, rate_head=args.rate_head, lfo_grad=args.lfo_grad,
+                                       mod_phase=args.mod_phase, rate_ce_stop=args.rate_ce_stop,
+                                       rate_aux=args.rate_aux),
                    write=not args.eval_only)
     model = E.Estimator(sr=SR, t_off=T_OFF, arch=args.arch, act=args.act, lfo_read=args.lfo_read,
-                        rate_head=args.rate_head, lfo_grad=args.lfo_grad)
+                        rate_head=args.rate_head, lfo_grad=args.lfo_grad, mod_phase=args.mod_phase,
+                        rate_ce_stop=args.rate_ce_stop, rate_aux=args.rate_aux)
     # v8.4: GRU 等の遅延構築レイヤをチェックポイント復元前にビルドしておく
     model(tf.zeros([1, N]), tf.constant([220.0], tf.float32), temp=1.0, hard=True)
     opt = tf.keras.optimizers.Adam(args.lr)

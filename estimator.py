@@ -78,19 +78,25 @@ def hl_gauss_target(rate):
     return p / tf.maximum(tf.reduce_sum(p, -1, keepdims=True), 1e-12)
 
 
-def mod_spectrum(mel):
+def mod_spectrum(mel, phase=False):
     """変調スペクトル（実験 42）: 対数メル [B,T,64] の各帯域の時間変化を周波数分析 → [B,82,16]。
     帯域ごとに時間平均を引いてハン窓をかけ、512 点に 0 を詰めてフーリエ変換した振幅。
     62.5 コマ/秒なので 0.122 Hz 刻み。1〜82 段 = 0.12〜10.0 Hz（LFO のレートの範囲）を取り、
-    隣り合う 4 帯域ずつ平均して 16 組にし、log(1 + 振幅) にする"""
+    隣り合う 4 帯域ずつ平均して 16 組にし、log(1 + 振幅) にする。
+    phase=True（実験 46）: 位相も渡す。各帯域の複素係数を単位ベクトル（cos, sin）にして log(1 + 振幅) で重みを付け、
+    4 帯域ずつ平均した実部・虚部を加える → [B,82,48]（振幅 16 組 ＋ 実部 16 組 ＋ 虚部 16 組）"""
     T = tf.shape(mel)[1]
     x = mel - tf.reduce_mean(mel, axis=1, keepdims=True)
     x = x * tf.signal.hann_window(T, periodic=False)[None, :, None]
-    spec = tf.abs(tf.signal.rfft(tf.transpose(x, [0, 2, 1]), fft_length=[MOD_NFFT]))   # [B,64,257]
-    spec = spec[:, :, 1:MOD_BINS + 1]                                                 # [B,64,82]
+    X = tf.signal.rfft(tf.transpose(x, [0, 2, 1]), fft_length=[MOD_NFFT])[:, :, 1:MOD_BINS + 1]   # [B,64,82] 複素
+    amp = tf.abs(X)
     nb = mel.shape[2] // MOD_GROUP
-    spec = tf.reduce_mean(tf.reshape(spec, [-1, nb, MOD_GROUP, MOD_BINS]), axis=2)     # [B,16,82]
-    return tf.transpose(tf.math.log(1.0 + spec), [0, 2, 1])                          # [B,82,16]
+    grp = lambda a: tf.reduce_mean(tf.reshape(a, [-1, nb, MOD_GROUP, MOD_BINS]), axis=2)     # [B,16,82]
+    feats = [tf.math.log(1.0 + grp(amp))]
+    if phase:
+        w = tf.math.log(1.0 + amp) / tf.maximum(amp, 1e-6)
+        feats += [grp(tf.math.real(X) * w), grp(tf.math.imag(X) * w)]
+    return tf.transpose(tf.concat(feats, axis=1), [0, 2, 1])                          # [B,82,16 or 48]
 
 
 def scale_grad(x, a):
@@ -118,11 +124,18 @@ ACTIVATIONS = {"relu": "relu", "leaky": leaky_relu}
 
 class Estimator(tf.keras.Model):
     def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu", lfo_read="trunk", rate_head="reg",
-                 lfo_grad=1.0):
+                 lfo_grad=1.0, mod_phase=False, rate_ce_stop=False, rate_aux=False):
         super().__init__()
         self.sr, self.t_off, self.arch, self.act = sr, t_off, arch, act
         self.rate_head = rate_head                # "reg": 対数レートの回帰（2 乗誤差） / "hlgauss": 区間の分類（実験 44）
         self.lfo_grad = lfo_grad                  # LFO のヘッドの損失が共有の層（trunk 以前）へ流す勾配の倍率（実験 45）
+        self.mod_phase = mod_phase                # 変調スペクトルに位相も加える（実験 46）
+        self.rate_ce_stop = rate_ce_stop          # レートの分類の勾配だけ共有の層に流さない（実験 46）
+        self.rate_aux = rate_aux                  # レートの回帰（2 乗誤差）を補助として加え、共有の層まで流す（実験 46）
+        if (rate_ce_stop or rate_aux) and rate_head != "hlgauss":
+            raise ValueError("rate_ce_stop・rate_aux は rate_head=hlgauss のときのみ")
+        if (rate_ce_stop or mod_phase) and lfo_read != "mod":
+            raise ValueError("rate_ce_stop・mod_phase は lfo_read=mod のときのみ")
         if lfo_grad != 1.0 and lfo_read == "ends":
             raise ValueError("lfo_grad は lfo_read が trunk か mod のときのみ")
         self.lfo_read = lfo_read                  # "ends": LFO のヘッドだけ BiGRU の両端の状態から読む（v2〜v4）
@@ -177,11 +190,11 @@ class Estimator(tf.keras.Model):
 
     def _encode(self, x, f0, training=False):
         """→ (trunk の出力, LFO 専用の特徴 or None)"""
-        ends = None
+        ends = rate_in = None
         S = tf.abs(tf.signal.stft(x, 1024, 256, fft_length=1024))     # [B,T,513]
         mel = tf.math.log(tf.matmul(S, self.mel_mat) + 1e-5)          # [B,T,64]
         if self.lfo_read == "mod":
-            m = mod_spectrum(mel)                                      # [B,82,16]
+            m = mod_spectrum(mel, self.mod_phase)                      # [B,82,16 or 48]
             for c in self.mod_convs:
                 m = c(m)                                               # [B,82,32]
             mod_feat = self.mod_dense(tf.reshape(m, [tf.shape(m)[0], MOD_BINS * MOD_CH]))
@@ -211,13 +224,19 @@ class Estimator(tf.keras.Model):
         out = self.trunk(tf.concat([h, f0n], axis=-1))
         if self.lfo_read == "mod":
             ends = self.lfo_trunk(tf.concat([scale_grad(out, self.lfo_grad), mod_feat], axis=-1))
-        return out, ends
+            if self.rate_ce_stop:
+                # 実験 46: 同じ LFO 専用の層に、勾配を止めた trunk の出力をもう一度通してレートの分類だけに使う。
+                # 分類の勾配は LFO 専用の層・変調スペクトルの枝には流れ、共有の層には流れない
+                rate_in = self.lfo_trunk(tf.concat([tf.stop_gradient(out), mod_feat], axis=-1))
+        return out, ends, rate_in
 
     def call(self, x, f0, temp=1.0, hard=True, noise=True, training=False):
         B = tf.shape(x)[0]
-        h, h_l = self._encode(x, f0, training=training)
+        h, h_l, h_r = self._encode(x, f0, training=training)
         if h_l is None:
             h_l = scale_grad(h, self.lfo_grad)
+        if h_r is None:
+            h_r = h_l
         # --- ENV（割合パラメータ化） ---
         ue = tf.sigmoid(tf.reshape(self.h_env(h), [B, K, 5]))
         a = tf.maximum(ue[..., 0] * self.t_off, 1e-3)
@@ -229,7 +248,7 @@ class Estimator(tf.keras.Model):
         # --- LFO（rate 対数 / 位相は (cos,sin) → 円環復元） ---
         ul = tf.reshape(self.h_lfo(h_l), [B, K, 4])
         if self.rate_head == "hlgauss":                               # 実験 44: レートは区間の分類で出す
-            rate_logits = tf.reshape(self.h_rate(h_l), [B, K, RATE_NB])
+            rate_logits = tf.reshape(self.h_rate(h_r), [B, K, RATE_NB])
             rate = rate_from_logits(rate_logits)
         else:
             rate = 0.1 * tf.pow(100.0, tf.sigmoid(ul[..., 0]))
@@ -262,6 +281,8 @@ class Estimator(tf.keras.Model):
                    R=R_hat, theta_stat=theta, theta_osc=st[:, :2], gmk=st[:, 2])
         if self.rate_head == "hlgauss":
             out["rate_logits"] = rate_logits
+        if self.rate_aux:                                             # 補助のレートの回帰（予測には使わない）
+            out["rate_reg"] = 0.1 * tf.pow(100.0, tf.sigmoid(ul[..., 0]))
         return out
 
 
@@ -363,6 +384,10 @@ def losses(pred, batch, x_true, sr, t_off, n_harm, lam, matching=True):
         r_term = tf.nn.softmax_cross_entropy_with_logits(
             labels=hl_gauss_target(batch["src_params"][..., 0]),
             logits=gather_rows(pred["rate_logits"], mapping))
+        if "rate_reg" in pred:                                        # 実験 46: 補助のレートの回帰（共有の層まで流す）
+            lr_a = (tf.math.log(tf.maximum(gather_rows(pred["rate_reg"], mapping), 1e-3) / 0.1)
+                    - tf.math.log(tf.maximum(batch["src_params"][..., 0], 1e-3) / 0.1)) / np.log(100.0)
+            r_term = r_term + lr_a ** 2
     else:
         r_term = lr_n ** 2
     d_lfo = (wS[:, 0] * r_term + wS[:, 1] * circ ** 2
