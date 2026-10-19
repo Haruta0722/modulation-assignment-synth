@@ -93,6 +93,14 @@ def mod_spectrum(mel):
     return tf.transpose(tf.math.log(1.0 + spec), [0, 2, 1])                          # [B,82,16]
 
 
+def scale_grad(x, a):
+    """値はそのまま通し、逆向きの勾配だけ a 倍にする（実験 45）。a = 0 で勾配を止める"""
+    if a == 1.0:
+        return x
+    g = tf.stop_gradient(x)
+    return g if a == 0.0 else g + a * (x - g)
+
+
 def fixed_type(B):
     """typed の枠並び（実験 41）: 枠ごとに決まった型の one-hot [B,K,2]（class0=ENV）と、それに合う大きなロジット"""
     st = tf.constant(ds.SLOT_TYPE)
@@ -109,10 +117,14 @@ ACTIVATIONS = {"relu": "relu", "leaky": leaky_relu}
 
 
 class Estimator(tf.keras.Model):
-    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu", lfo_read="trunk", rate_head="reg"):
+    def __init__(self, sr=16000, t_off=1.0, arch="v2", act="relu", lfo_read="trunk", rate_head="reg",
+                 lfo_grad=1.0):
         super().__init__()
         self.sr, self.t_off, self.arch, self.act = sr, t_off, arch, act
         self.rate_head = rate_head                # "reg": 対数レートの回帰（2 乗誤差） / "hlgauss": 区間の分類（実験 44）
+        self.lfo_grad = lfo_grad                  # LFO のヘッドの損失が共有の層（trunk 以前）へ流す勾配の倍率（実験 45）
+        if lfo_grad != 1.0 and lfo_read == "ends":
+            raise ValueError("lfo_grad は lfo_read が trunk か mod のときのみ")
         self.lfo_read = lfo_read                  # "ends": LFO のヘッドだけ BiGRU の両端の状態から読む（v2〜v4）
                                                   # "mod" : LFO のヘッドに変調スペクトルの枝を加える（実験 42）
         a = ACTIVATIONS[act]                      # 畳み込み・時間方向の畳み込み・trunk の活性化関数
@@ -198,14 +210,14 @@ class Estimator(tf.keras.Model):
         f0n = tf.math.log(f0 / F0_LO)[:, None] / np.log(16.0)         # MIDI36-84 → [0,1]
         out = self.trunk(tf.concat([h, f0n], axis=-1))
         if self.lfo_read == "mod":
-            ends = self.lfo_trunk(tf.concat([out, mod_feat], axis=-1))
+            ends = self.lfo_trunk(tf.concat([scale_grad(out, self.lfo_grad), mod_feat], axis=-1))
         return out, ends
 
     def call(self, x, f0, temp=1.0, hard=True, noise=True, training=False):
         B = tf.shape(x)[0]
         h, h_l = self._encode(x, f0, training=training)
         if h_l is None:
-            h_l = h
+            h_l = scale_grad(h, self.lfo_grad)
         # --- ENV（割合パラメータ化） ---
         ue = tf.sigmoid(tf.reshape(self.h_env(h), [B, K, 5]))
         a = tf.maximum(ue[..., 0] * self.t_off, 1e-3)

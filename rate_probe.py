@@ -175,7 +175,7 @@ def summary(root):
     rows = {}
     rows["学習なしの山取り"] = [{k: rate_stats(naive_peak(te["feats"])[m], te["rate"][m]) for k, m in G.items()}]
     # 本体 v25 / v27: 同じ音（test の LFO 1 本の音）での予測
-    for tag in ("v25", "v27", "v28", "v29"):
+    for tag in ("v25", "v27", "v28", "v29", "v30", "v31"):
         R_ = []
         for p in sorted(glob.glob(f"dump_{tag}_single_s*_test.npz")):
             d = np.load(p)
