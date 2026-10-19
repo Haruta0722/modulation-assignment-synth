@@ -158,6 +158,7 @@ def main():
 
     out = {k: np.concatenate(v, axis=0) for k, v in acc.items()}
     out["model"] = np.array(args.model)
+    out["lfo_tri"] = np.array(ds.LFO_TRI)                     # e_true・e_param を計算した LFO の式（実験 47）
     np.savez_compressed(args.out, **out)
     size = os.path.getsize(args.out) / 1e6
     print(f"saved {args.out}  ({len(out['idx'])} samples, {size:.1f} MB)")

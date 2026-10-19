@@ -107,6 +107,7 @@ def parse_args():
 class Data:
     def __init__(self, root):
         self.man = json.load(open(os.path.join(root, "manifest.json")))
+        ds.set_lfo_tri(self.man.get("lfo_tri", "v7"))           # LFO の三角波の式をデータセットに合わせる（実験 47）
         n, N = self.man["n_total"], self.man["N"]
         self.wav = np.memmap(os.path.join(root, "waveforms.int16.bin"),
                              dtype=np.int16, mode="r", shape=(n, N))

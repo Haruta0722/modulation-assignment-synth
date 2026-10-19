@@ -34,11 +34,12 @@ def wrap(x):
     return (x + 0.5) % 1.0 - 0.5
 
 
-def lfo_wave(rate, phase, morph, t):
-    """diff_synth_tf.lfo と同じ波形（rate, phase, morph は [n]、t は [T] 秒）→ [n,T]"""
+def lfo_wave(rate, phase, morph, t, tri="v7"):
+    """diff_synth_tf.lfo と同じ波形（rate, phase, morph は [n]、t は [T] 秒）→ [n,T]。
+    tri: LFO の三角波の式（"v7" = dataset_v7 の誤った式、"tri" = 正しい三角波、実験 47）"""
     th = rate[:, None] * t[None, :] + phase[:, None]
     sin_w = np.sin(2 * np.pi * th)
-    tri_w = 1.0 - 4.0 * np.abs(th + 0.25 - np.floor(th + 0.75) - 0.5)
+    tri_w = 1.0 - 4.0 * np.abs(th + 0.25 - np.floor(th + {"v7": 0.75, "tri": 0.25}[tri]) - 0.5)
     m = morph[:, None]
     return 0.5 * (1.0 + m * sin_w + (1.0 - m) * tri_w)
 
@@ -73,7 +74,12 @@ def wave_stats(w, e, const):
                 abscorr=float(np.median(np.abs(corr))))                        # 上下反転も一致とみなした相関
 
 
-def template_fit(w, t, n_rate=160, n_phase=128, morphs=(0.0, 0.5, 1.0)):
+def dump_tri(d):
+    """dump に記録された LFO の三角波の式（記録がない dump は dataset_v7 の式）"""
+    return str(d["lfo_tri"]) if "lfo_tri" in d else "v7"
+
+
+def template_fit(w, t, n_rate=160, n_phase=128, morphs=(0.0, 0.5, 1.0), tri="v7"):
     """軌跡 w [n,T] と時間方向の相関が最大になる LFO 波形の (レート, 位相, morph)。真の値は使わない"""
     wc = w - w.mean(1, keepdims=True)
     wc = wc / np.maximum(np.linalg.norm(wc, axis=1, keepdims=True), 1e-9)
@@ -84,7 +90,7 @@ def template_fit(w, t, n_rate=160, n_phase=128, morphs=(0.0, 0.5, 1.0)):
     br, bp, bm = np.zeros(n), np.zeros(n), np.zeros(n)
     for m in morphs:
         for r in rates:
-            bank = lfo_wave(np.full(n_phase, r), phases, np.full(n_phase, m), t)
+            bank = lfo_wave(np.full(n_phase, r), phases, np.full(n_phase, m), t, tri)
             bc = bank - bank.mean(1, keepdims=True)
             bc = bc / np.maximum(np.linalg.norm(bc, axis=1, keepdims=True), 1e-9)
             c = wc @ bc.T                                                    # [n,P]
@@ -102,6 +108,7 @@ def analyze(path):
     D = A.Dump(path)
     d = np.load(path)
     sp_t, sp_p = d["sp_true"], d["sp_pred"]
+    tri = dump_tri(d)
     T = D.e_true.shape[-1]
     t = np.minimum(np.arange(T) * HOP + OFF, 1.5 * SR - 1) / SR
     b, k = np.nonzero(D.used & (D.type_true == 0))                    # 使用中の真の LFO
@@ -119,17 +126,17 @@ def analyze(path):
         best = np.zeros(len(b))
         best_err = np.full(len(b), np.inf)
         for g in grid:
-            err = np.abs(lfo_wave(rate, np.full(len(b), g), morph, t) - w).mean(1)
+            err = np.abs(lfo_wave(rate, np.full(len(b), g), morph, t, tri) - w).mean(1)
             upd = err < best_err
             best[upd], best_err[upd] = g, err[upd]
         out["phase_traj"] = (best, phase)
         # [B2] 型紙の当てはめ（真の値を使わない）
-        br, bp, bm = template_fit(w, t)
+        br, bp, bm = template_fit(w, t, tri=tri)
         out["tfit_phase"], out["tfit_rate"], out["tfit_morph"] = (bp, phase), (np.log(br), np.log(rate)), (bm, morph)
         for tc in T_LOC:
             out[f"loc_tfit_{tc}"] = ((bp + br * tc) % 1.0, (phase + rate * tc) % 1.0)
     # 検算: 真の波形に型紙を当てはめれば位相・レートが戻るか
-    br0, bp0, _ = template_fit(e, t)
+    br0, bp0, _ = template_fit(e, t, tri=tri)
     out["check_phase"], out["check_rate"] = (bp0, phase), (np.log(br0), np.log(rate))
     lfo_p = D.type_pred[b, k] == 0
     out["lfo_pred_frac"] = float(lfo_p.mean())

@@ -26,9 +26,10 @@ import time
 import numpy as np
 import tensorflow as tf
 
-from lfo_phase_check import circ_stats, lin_stats, lfo_wave, RATE_BINS
+from lfo_phase_check import circ_stats, dump_tri, lin_stats, lfo_wave, RATE_BINS
 
 SR, HOP, N = 16000, 256, 24000
+TRI = "v7"
 
 
 def load_lfo(path):
@@ -51,10 +52,10 @@ def fit_degrade(D):
     return alpha.astype(np.float32), beta.astype(np.float32), res.astype(np.float32)
 
 
-def lfo_tf(rate, phase, morph, t):
+def lfo_tf(rate, phase, morph, t, tri="v7"):
     th = rate[:, None] * t[None, :] + phase[:, None]
     sin_w = tf.sin(2 * np.pi * th)
-    tri_w = 1.0 - 4.0 * tf.abs(th + 0.25 - tf.floor(th + 0.75) - 0.5)
+    tri_w = 1.0 - 4.0 * tf.abs(th + 0.25 - tf.floor(th + {"v7": 0.75, "tri": 0.25}[tri]) - 0.5)
     m = morph[:, None]
     return 0.5 * (1.0 + m * sin_w + (1.0 - m) * tri_w)
 
@@ -98,7 +99,7 @@ def make_loss(kind, t):
             l += tf.reduce_mean(tf.reduce_sum((u - tgt) ** 2, -1)) / (4 * np.pi ** 2) \
                 + tf.reduce_mean((morph - m) ** 2)
         else:
-            l += tf.reduce_mean(tf.abs(lfo_tf(rate, phase, morph, t) - e))
+            l += tf.reduce_mean(tf.abs(lfo_tf(rate, phase, morph, t, TRI) - e))
         return l
     return loss
 
@@ -146,9 +147,11 @@ def main():
     rng = np.random.default_rng(args.seed)
 
     TR, VA, TE = load_lfo(args.train_dump), load_lfo(args.val_dump), load_lfo(args.test_dump)
+    global TRI
+    TRI = dump_tri(np.load(args.train_dump))                         # LFO の三角波の式（実験 47）
     T = TR["e"].shape[1]
     t = (np.minimum(np.arange(T) * HOP + 512, N - 1) / SR).astype(np.float32)
-    chk = np.abs(lfo_wave(TE["rate"], TE["phase"], TE["morph"], t) - TE["e"]).max()
+    chk = np.abs(lfo_wave(TE["rate"], TE["phase"], TE["morph"], t, TRI) - TE["e"]).max()
     print(f"LFO 本数 train {len(TR['rate'])} / val {len(VA['rate'])} / test {len(TE['rate'])}、"
           f"式と真の波形の差の最大 {chk:.2e}", flush=True)
     alpha, beta, res = fit_degrade(TR)
@@ -159,7 +162,7 @@ def main():
             return TR["w"][j], TR["e"][j], TR["rate"][j], TR["phase"][j], TR["morph"][j]
         j = rng.integers(0, len(TR["rate"]), n)
         r, m, p = TR["rate"][j], TR["morph"][j], rng.random(n).astype(np.float32)
-        e = lfo_wave(r, p, m, t).astype(np.float32)
+        e = lfo_wave(r, p, m, t, TRI).astype(np.float32)
         if args.train == "clean":
             return e, e, r, p, m
         i = rng.integers(0, len(alpha), n)                       # 別の音の縮み・ずれ・残差

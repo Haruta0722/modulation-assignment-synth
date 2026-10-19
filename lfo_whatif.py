@@ -11,7 +11,7 @@ import argparse
 import numpy as np
 
 import analyze_dump as A
-from lfo_phase_check import lfo_wave
+from lfo_phase_check import dump_tri, lfo_wave
 
 SR, HOP, OFF, N, TOL = 16000, 256, 512, 24000, 0.1
 
@@ -29,6 +29,7 @@ def main():
         D = A.Dump(p)
         d = np.load(p)
         sp_t, sp_p = d["sp_true"], d["sp_pred"]
+        tri = dump_tri(d)
         T = D.e_true.shape[-1]
         t = np.minimum(np.arange(T) * HOP + OFF, N - 1) / SR
         b, m = np.nonzero(D.pred_on & D.true_on)
@@ -39,12 +40,12 @@ def main():
         dep_ok = np.abs(D.d_pred[b, m] - D.d_true[b, m]) <= TOL
         sign_ok = np.sign(D.d_pred[b, m]) == np.sign(D.d_true[b, m])
         e_true = D.e_true[b, kt]
-        chk = np.abs(lfo_wave(sp_p[b, kp, 0], sp_p[b, kp, 1], sp_p[b, kp, 2], t) - D.e_param[b, kp]).max()
+        chk = np.abs(lfo_wave(sp_p[b, kp, 0], sp_p[b, kp, 1], sp_p[b, kp, 2], t, tri) - D.e_param[b, kp]).max()
         for name, repl in variants:
             q = {j: sp_p[b, kp, i].copy() for i, j in enumerate(("rate", "phase", "morph"))}
             for j in repl:
                 q[j] = sp_t[b, kt, ("rate", "phase", "morph").index(j)]
-            shp_ok = np.abs(lfo_wave(q["rate"], q["phase"], q["morph"], t) - e_true).mean(1) <= TOL
+            shp_ok = np.abs(lfo_wave(q["rate"], q["phase"], q["morph"], t, tri) - e_true).mean(1) <= TOL
             res[name].append([shp_ok.mean(), (dep_ok & shp_ok).sum() / n_true, shp_ok.sum() / n_true])
         extra.append([len(b) / n_true, dep_ok.mean(), sign_ok.mean(), dep_ok[sign_ok].mean(), chk])
     ex = np.array(extra).mean(0)

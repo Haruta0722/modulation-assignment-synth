@@ -123,10 +123,13 @@ def main():
     ap.add_argument("--T", type=float, default=1.5)
     ap.add_argument("--toff", type=float, default=1.0)
     ap.add_argument("--smoke", action="store_true", help="64件で動作確認＋整合検査")
+    ap.add_argument("--lfo_tri", type=str, default="tri", choices=["tri", "v7"],
+                    help="LFO の三角波の式（実験 47）。tri = 正しい三角波、v7 = dataset_v7 の誤った式")
     args = ap.parse_args()
     if args.smoke:
         args.n_total, args.out, args.batch = 64, args.out + "_smoke", 16
 
+    ds.set_lfo_tri(args.lfo_tri)
     SR, T, T_OFF = args.sr, args.T, args.toff
     N = int(SR * T)
     n = args.n_total
@@ -168,10 +171,12 @@ def main():
     man = dict(spec="v7", n_total=n, sr=SR, T=T, t_off=T_OFF, N=N,
                int16_scale=INT16_SCALE, seed=args.seed, J_max=J_MAX,
                depth_lo=DEPTH_LO, midi_set=MIDI_SET.tolist(), splits=splits,
-               done=0, clipped_samples=0)
+               done=0, clipped_samples=0, lfo_tri=args.lfo_tri)
     if os.path.exists(man_path):
-        man.update({k: v for k, v in json.load(open(man_path)).items()
-                    if k in ("done", "clipped_samples")})
+        old = json.load(open(man_path))
+        if old.get("lfo_tri", "v7") != args.lfo_tri:
+            raise SystemExit(f"{man_path} は lfo_tri={old.get('lfo_tri', 'v7')} で生成途中。--lfo_tri をそろえる")
+        man.update({k: v for k, v in old.items() if k in ("done", "clipped_samples")})
 
     wav = np.memmap(wav_path, dtype=np.int16, mode="r+" if os.path.exists(wav_path) else "w+",
                     shape=(n, N))
@@ -241,6 +246,10 @@ def main():
     print(f"  column sparsity (by construction):  True")
     print(f"  depth in ±[0.2,1]:                  {bool((np.abs(depth[z >= 0]) >= DEPTH_LO - 1e-6).all())}")
     print(f"  theta lower bounds:                 {bool((theta >= THETA_LO[None, :] - 1e-6).all())}")
+    if n_lfo:
+        e_l = ds.lfo(tf.constant(env[:256]), N, SR).numpy()[styp[:256] == 0]
+        print(f"  LFO waveform in [0,1] (lfo_tri={ds.LFO_TRI}): {bool((e_l.min() >= -1e-5) & (e_l.max() <= 1 + 1e-5))}"
+              f"  (min {e_l.min():.3f}, max {e_l.max():.3f})")
     # ラウンドトリップ: 保存波形 vs 再合成（int16 量子化以内）
     i0 = 0
     fmax = float(f0[i0]) * 2 ** (100 / 1200)

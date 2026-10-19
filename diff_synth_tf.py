@@ -93,17 +93,33 @@ def adhsr(env_params, t_off, N, sr):
     return tf.clip_by_value(e, 0.0, 1.0)
 
 
+# LFO の三角波の式（実験 47）。データセットの manifest の "lfo_tri" に合わせて train.Data が set_lfo_tri() で切り替える
+#   "v7" : dataset_v7 の生成に使った式。floor(θ + 0.75) の誤りで、三角波ではなく −3〜1 ののこぎり波のような形になる
+#          （LFO の波形は morph = 0 で −1〜1）。dataset_v7 の評価・学習の再現のために残す
+#   "tri": 正しい三角波。floor(θ + 0.25) で sin と位相がそろい −1〜1、LFO の波形は 0〜1
+LFO_TRI = "v7"
+TRI_FLOOR_OFFSET = {"v7": 0.75, "tri": 0.25}
+
+
+def set_lfo_tri(version):
+    """LFO の三角波の式を切り替える。モデルや合成のグラフを作る前に呼ぶ"""
+    global LFO_TRI
+    if version not in TRI_FLOOR_OFFSET:
+        raise ValueError(f"lfo_tri={version}（v7 か tri）")
+    LFO_TRI = version
+
+
 def lfo(src_params, N, sr):
     """§2.1b 周期LFO。スロット共用: [...,0]=rate[Hz], [...,1]=phase[0,1), [...,2]=morph m
     ℓ = ½(1 + m·sin(2πθ) + (1−m)·tri(θ)),  θ = f·t + φ,  tri は sin と位相整列した三角波。
-    振幅は構造的に [0,1]（振幅ゲージなし）。"""
+    振幅は構造的に [0,1]（振幅ゲージなし）。ただし LFO_TRI = "v7" では三角波の式が誤っていて [−1,1] になる"""
     f = src_params[..., 0:1]
     ph = src_params[..., 1:2]
     m = src_params[..., 2:3]
     t = tf.range(N, dtype=tf.float32)[None, None, :] / sr
     th = f * t + ph
     sin_w = tf.sin(2.0 * np.pi * th)
-    tri_w = 1.0 - 4.0 * tf.abs(th + 0.25 - tf.floor(th + 0.75) - 0.5)
+    tri_w = 1.0 - 4.0 * tf.abs(th + 0.25 - tf.floor(th + TRI_FLOOR_OFFSET[LFO_TRI]) - 0.5)
     return 0.5 * (1.0 + m * sin_w + (1.0 - m) * tri_w)
 
 
