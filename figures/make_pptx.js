@@ -62,25 +62,38 @@ function wire(sl, pts, o = {}) {
   }
 }
 
+function group(sl, x, y, w, h, title, sub, name) {
+  sl.addShape("rect", { x: mm(x), y: mm(y), w: mm(w), h: mm(h), fill: { type: "none" },
+                        line: { color: "000000", width: 0.5 }, objectName: name });
+  label(sl, x, y + h - 7, w, title, { size: PT, h: 3 });          // 枠の名前は枠の下側に置く
+  if (sub) label(sl, x, y + h - 3.8, w, sub, { size: PT_S, h: 2.6 });
+}
 // ---------------- (a) シンセサイザ（構成 C） ----------------
+// 上: 変調ソース → 割り当て R → 18 の変調先。下: 信号の流れ（順番は固定）。各段の下の文字がその段の変調先
 async function synth() {
-  const p = deck(84, 46), s = p.addSlide();
-  // ソースと割り当て
-  box(s, 1, 1, 17, 8, ["ENV 1～4", "LFO 1～3"], { name: "ソース" });
-  wire(s, [[18, 5], [24, 5]]);
-  box(s, 24, 1, 24, 8, ["割り当て $R$", "$z_m$, $d_m$"], { name: "割り当て" });
-  wire(s, [[48, 5], [54, 5]]);
-  label(s, 55, 3.5, 28, "18 の変調先へ", { size: PT, align: "left" });
-  // 1 段目: オシレータ → ドライブ → フィルタ → VCA
-  const r1 = 13, c1 = r1 + 3;
-  const row1 = [[1, 19, "オシレータ×2", "level×2, Fin×2"], [24, 13, "ドライブ", "drive"],
+  const p = deck(84, 66), s = p.addSlide();
+  // 変調ソース（形を小さな折れ線で示す）
+  group(s, 0.5, 0.5, 24, 23, "変調ソース", "1 音に 4 本", "枠: 変調ソース");
+  box(s, 2.5, 2, 20, 6, "", { name: "ENV" }); label(s, 3, 3.5, 8, "ENV", { size: PT, align: "left" });
+  wire(s, [[11, 7.2], [12.5, 3], [14, 4.8], [18, 4.8], [20.5, 7.2]], { noArrow: true, w: 0.5 });
+  box(s, 2.5, 9.5, 20, 6, "", { name: "LFO" }); label(s, 3, 11, 8, "LFO", { size: PT, align: "left" });
+  wire(s, [[11, 12.5], [12.25, 10.3], [14.75, 14.7], [17.25, 10.3], [19.75, 14.7], [21, 12.5]], { noArrow: true, w: 0.5 });
+  // 割り当て
+  wire(s, [[24.5, 8], [30, 8]]);
+  box(s, 30, 3, 24, 10, ["割り当て $R$", "$z_m$, $d_m$"], { name: "割り当て" });
+  label(s, 26, 14.2, 32, "$c_m$($n$) = σ($θ_m$ + $d_m$$e$($n$))", { size: PT_S });
+  wire(s, [[54, 8], [59, 8]]);
+  label(s, 59.5, 6.5, 24, "18 の変調先へ", { size: PT, align: "left" });
+  wire(s, [[70.5, 10], [70.5, 25]]);
+  // 信号の流れ
+  group(s, 0.5, 25.5, 83, 40, "信号の流れ（順番は固定）", null, "枠: 信号の流れ");
+  const r1 = 28, c1 = r1 + 3;
+  const row1 = [[1.5, 18.5, "オシレータ×2", "level×2, Fin×2"], [24, 13, "ドライブ", "drive"],
                 [41, 13, "フィルタ", "cutoff, res"], [58, 11, "VCA", "amp"]];
   row1.forEach(([x, w, n, d]) => { box(s, x, r1, w, 6, n, { name: n }); label(s, x - 3, r1 + 6.6, w + 6, d); });
   wire(s, [[20, c1], [24, c1]]); wire(s, [[37, c1], [41, c1]]); wire(s, [[54, c1], [58, c1]]);
-  // VCA → コーラスへ折り返す
-  const r2 = 30, c2 = r2 + 3;
-  wire(s, [[69, c1], [81, c1], [81, 25.5], [2, 25.5], [2, c2], [6, c2]]);
-  // 2 段目: エフェクト（破線の枠 = 確率 1/2 で素通し）
+  const r2 = 44, c2 = r2 + 3;
+  wire(s, [[69, c1], [81, c1], [81, 39.5], [2.5, 39.5], [2.5, c2], [6, c2]]);
   const row2 = [[6, 13, "コーラス", "rate, depth, fb"], [26, 11, "コンプ", "thresh, ratio"],
                 [44, 9, "EQ", "low, mid, high"], [60, 12, "ディスト", "drive, mix"]];
   row2.forEach(([x, w, n, d]) => {
@@ -90,18 +103,12 @@ async function synth() {
   });
   wire(s, [[19, c2], [26, c2]]); wire(s, [[37, c2], [44, c2]]); wire(s, [[53, c2], [60, c2]]); wire(s, [[72, c2], [78, c2]]);
   box(s, 78, r2, 5, 6, "音", { name: "音" });
-  label(s, 1, 42, 82, "破線の段はそれぞれ確率 1/2 で素通し", { align: "left" });
+  label(s, 2, 54.3, 80, "破線の段はそれぞれ確率 1/2 で素通し", { align: "left" });
   await p.writeFile({ fileName: "fig_synth.pptx" });
 }
 
 // ---------------- (b) 推定器 ----------------
 // 左: エンコーダ（全出力で共有）、中: 出力ヘッド 8 個、右: 各ヘッドの出力。枠の名前は下側
-function group(sl, x, y, w, h, title, sub, name) {
-  sl.addShape("rect", { x: mm(x), y: mm(y), w: mm(w), h: mm(h), fill: { type: "none" },
-                        line: { color: "000000", width: 0.5 }, objectName: name });
-  label(sl, x, y + h - 7, w, title, { size: PT, h: 3 });          // 枠の名前は枠の下側に置く
-  if (sub) label(sl, x, y + h - 3.8, w, sub, { size: PT_S, h: 2.6 });
-}
 async function estimator() {
   const p = deck(84, 58), s = p.addSlide();
   const top = 4, H = 53;
