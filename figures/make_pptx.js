@@ -95,40 +95,52 @@ async function synth() {
 }
 
 // ---------------- (b) 推定器 ----------------
+// 左: エンコーダ（全出力で共有）、中: 出力ヘッド 8 個、右: 各ヘッドの出力。枠の名前は下側
+function group(sl, x, y, w, h, title, sub, name) {
+  sl.addShape("rect", { x: mm(x), y: mm(y), w: mm(w), h: mm(h), fill: { type: "none" },
+                        line: { color: "000000", width: 0.5 }, objectName: name });
+  label(sl, x, y + h - 7, w, title, { size: PT, h: 3 });          // 枠の名前は枠の下側に置く
+  if (sub) label(sl, x, y + h - 3.8, w, sub, { size: PT_S, h: 2.6 });
+}
 async function estimator() {
-  const p = deck(84, 67), s = p.addSlide();
+  const p = deck(84, 58), s = p.addSlide();
+  const top = 4, H = 53;
+  group(s, 0.5, top, 29, H, "エンコーダ", "全出力で共有", "枠: エンコーダ");
+  group(s, 35.5, top, 26, H, "出力ヘッド（8 個）", "各 全結合 1 層", "枠: 出力ヘッド");
   // 入力
-  label(s, 1, 0.5, 18, "音（1.5 s）", { size: PT });
-  label(s, 56, 0.5, 13, "$f_0$", { size: PT });
-  wire(s, [[10, 3.5], [10, 6]]); wire(s, [[62.5, 3.5], [62.5, 6]]);
-  // 符号化器
-  const y = 6, h = 8, c = y + 4;
-  box(s, 1, y, 18, h, ["対数メル", "128 帯域"], { name: "対数メル" });
-  box(s, 23, y, 16, h, ["2 次元", "畳み込み×4"], { name: "畳み込み" });
-  box(s, 43, y, 9, h, ["双方向", "GRU"], { name: "GRU" });
-  box(s, 56, y, 13, h, ["全結合", "256"], { name: "共有の全結合層" });
-  wire(s, [[19, c], [23, c]]); wire(s, [[39, c], [43, c]]); wire(s, [[52, c], [56, c]]);
-  // 出力ヘッド 8 個（全結合層）
+  label(s, 4, 0.2, 22, "音（1.5 s）", { size: PT });
+  wire(s, [[18, 3.2], [18, 7]]);
+  // エンコーダの中: 対数メル → 畳み込み → GRU → 全結合
+  const ex = 8, ew = 20, eh = 7;
+  const enc = [[7, ["対数メル", "128 帯域"], "対数メル"], [17, ["2 次元", "畳み込み×4"], "畳み込み"],
+               [27, ["双方向 GRU"], "GRU"], [37, ["全結合", "256 次元"], "共有の全結合層"]];
+  enc.forEach(([y, t, n], i) => {
+    box(s, ex, y, ew, eh, t, { name: n });
+    if (i < enc.length - 1) wire(s, [[ex + ew / 2, y + eh], [ex + ew / 2, enc[i + 1][0]]]);
+  });
+  label(s, 1, 38.5, 5, "$f_0$", { size: PT });
+  wire(s, [[5.2, 40.5], [ex, 40.5]]);
+  // 共有の特徴 → 8 個のヘッドへ分岐
   const heads = [
-    ["割り当て", "$z_m$：8 クラス × 18 変調先"],
-    ["深さ", "$d_m$：分類 × 18 変調先"],
-    ["ENV の形", "A, H, D, S, R × 4 枠"],
-    ["LFO のレート", "分類 × 3 枠"],
-    ["LFO の位相・波形", "2 つの値 × 3 枠"],
-    ["静的な値", "$θ_m$ × 18 変調先"],
-    ["その他の静的な値", "波形 × 2，makeup"],
+    ["割り当て", "$z_m$：8 択 × 18"],
+    ["深さ", "$d_m$ × 18"],
+    ["ENV の形", "AHDSR × 4 枠"],
+    ["LFO のレート", "レート × 3 枠"],
+    ["LFO の位相・波形", "位相, 波形 × 3 枠"],
+    ["静的な値", "$θ_m$ × 18"],
+    ["その他の静的な値", "波形 × 2, makeup"],
     ["エフェクトの有無", "有無 × 4 段"],
   ];
-  const y0 = 20, pitch = 5.4, hh = 4.2, bx = 12, bw = 25, bus = 7;
-  wire(s, [[62.5, y + h], [62.5, 16.5], [bus, 16.5], [bus, y0 + 7 * pitch + hh / 2]], { noArrow: true });
+  const hx = 37.5, hw = 22, hh = 4.2, y0 = 7, pitch = 5.1, bus = 32.5;
+  const cy = (i) => y0 + i * pitch + hh / 2;
+  wire(s, [[ex + ew, 40.5], [bus, 40.5]], { noArrow: true });
+  wire(s, [[bus, cy(0)], [bus, cy(7)]], { noArrow: true });
   heads.forEach(([n, o], i) => {
-    const yy = y0 + i * pitch, cc = yy + hh / 2;
-    wire(s, [[bus, cc], [bx, cc]]);
-    box(s, bx, yy, bw, hh, n, { name: "ヘッド: " + n });
-    wire(s, [[bx + bw, cc], [bx + bw + 4, cc]]);
-    label(s, bx + bw + 5, yy + 0.6, 42, o, { size: PT, align: "left" });
+    wire(s, [[bus, cy(i)], [hx, cy(i)]]);
+    box(s, hx, y0 + i * pitch, hw, hh, n, { name: "ヘッド: " + n });
+    wire(s, [[hx + hw, cy(i)], [63, cy(i)]]);
+    label(s, 63.6, cy(i) - 1.5, 20.4, o, { align: "left" });
   });
-  label(s, 1, 63.5, 82, "ソースの型は枠で固定（ENV 4 枠，LFO 3 枠）", { align: "left" });
   await p.writeFile({ fileName: "fig_estimator.pptx" });
 }
 
