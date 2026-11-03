@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 574" width="84mm" height="57.4mm" font-family="IPAPGothic, 'IPA Pゴシック', 'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', sans-serif"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#000"/></marker></defs><style>
+text{fill:#000}
+.n{font-size:24px}.b{font-size:23px;font-weight:bold}.s{font-size:19px;fill:#333}.d{font-size:19px;fill:#333}
+.bx{fill:#fff;stroke:#000;stroke-width:2}.g{fill:#e6e6e6;stroke:#000;stroke-width:2}
+.fx{fill:#fff;stroke:#000;stroke-width:2;stroke-dasharray:8 5}
+.w{fill:none;stroke:#000;stroke-width:2}.by{fill:none;stroke:#555;stroke-width:1.6;stroke-dasharray:6 4}
+.grp{fill:none;stroke:#000;stroke-width:1.4}
+</style><rect width="840" height="574" fill="#fff"/><rect class="bx" x="10" y="6" width="180" height="44" rx="22"/>
+<text class="n" x="100" y="36" text-anchor="middle">音（1.5 s）</text>
+<rect class="bx" x="662" y="6" width="120" height="44" rx="22"/>
+<text class="n" x="722" y="36" text-anchor="middle">f0</text>
+<path class="w" d="M100 50 V76" marker-end="url(#ar)"/>
+<path class="w" d="M722 50 V76" marker-end="url(#ar)"/>
+<rect class="bx" x="10" y="80" width="180" height="80" rx="6"/>
+<text class="n" x="100.0" y="114" text-anchor="middle">対数メル</text>
+<text class="s" x="100.0" y="143" text-anchor="middle">128 帯域</text>
+<rect class="bx" x="225" y="80" width="160" height="80" rx="6"/>
+<text class="n" x="305.0" y="114" text-anchor="middle">2 次元</text>
+<text class="s" x="305.0" y="143" text-anchor="middle">畳み込み ×4</text>
+<rect class="bx" x="420" y="80" width="160" height="80" rx="6"/>
+<text class="n" x="500.0" y="114" text-anchor="middle">双方向</text>
+<text class="s" x="500.0" y="143" text-anchor="middle">GRU</text>
+<rect class="bx" x="615" y="80" width="215" height="80" rx="6"/>
+<text class="n" x="722.5" y="114" text-anchor="middle">共有の特徴</text>
+<text class="s" x="722.5" y="143" text-anchor="middle">256 次元</text>
+<path class="w" d="M190 120 H221" marker-end="url(#ar)"/>
+<path class="w" d="M385 120 H416" marker-end="url(#ar)"/>
+<path class="w" d="M580 120 H611" marker-end="url(#ar)"/>
+<path class="w" d="M722 160 V196" marker-end="url(#ar)"/>
+<rect class="grp" x="2" y="200" width="836" height="250" rx="8"/>
+<text class="b" x="16" y="230" text-anchor="start">出力ヘッド 8 個（それぞれ全結合層 1 枚）</text>
+<rect class="g" x="12" y="248" width="196" height="84" rx="6"/>
+<text class="b" x="110" y="283" text-anchor="middle">割り当て</text>
+<text class="s" x="110" y="314" text-anchor="middle">18 ×（7 ＋ なし）</text>
+<rect class="g" x="218" y="248" width="196" height="84" rx="6"/>
+<text class="b" x="316" y="283" text-anchor="middle">深さ</text>
+<text class="s" x="316" y="314" text-anchor="middle">18（分類）</text>
+<rect class="g" x="424" y="248" width="196" height="84" rx="6"/>
+<text class="b" x="522" y="283" text-anchor="middle">ENV の形</text>
+<text class="s" x="522" y="314" text-anchor="middle">4 × 5</text>
+<rect class="g" x="630" y="248" width="196" height="84" rx="6"/>
+<text class="b" x="728" y="283" text-anchor="middle">LFO のレート</text>
+<text class="s" x="728" y="314" text-anchor="middle">3（分類）</text>
+<rect class="g" x="12" y="346" width="196" height="84" rx="6"/>
+<text class="b" x="110" y="381" text-anchor="middle">LFO の位相・波形</text>
+<text class="s" x="110" y="412" text-anchor="middle">3 × 2</text>
+<rect class="g" x="218" y="346" width="196" height="84" rx="6"/>
+<text class="b" x="316" y="381" text-anchor="middle">静的な値 <tspan font-style="italic">θ</tspan></text>
+<text class="s" x="316" y="412" text-anchor="middle">18</text>
+<rect class="g" x="424" y="346" width="196" height="84" rx="6"/>
+<text class="b" x="522" y="381" text-anchor="middle">その他の静的値</text>
+<text class="s" x="522" y="412" text-anchor="middle">波形 2・makeup 1</text>
+<rect class="g" x="630" y="346" width="196" height="84" rx="6"/>
+<text class="b" x="728" y="381" text-anchor="middle">エフェクトの有無</text>
+<text class="s" x="728" y="412" text-anchor="middle">4（2 値）</text>
+<path class="w" d="M420 450 V480" marker-end="url(#ar)"/>
+<rect class="bx" x="10" y="484" width="820" height="84" rx="6"/>
+<text class="n" x="420" y="518" text-anchor="middle">推定結果：割り当て R̂（18 × 7）、ソースの形、静的な値、エフェクトの有無</text>
+<text class="s" x="420" y="550" text-anchor="middle">ソースの型は枠で固定（ENV 4 枠・LFO 3 枠）。(a) のシンセに入れると音に戻せる</text></svg>

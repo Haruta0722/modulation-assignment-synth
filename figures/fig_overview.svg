@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 1162" width="84mm" height="116.2mm" font-family="IPAPGothic, 'IPA Pゴシック', 'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', sans-serif"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#000"/></marker></defs><style>
+text{fill:#000}
+.n{font-size:24px}.b{font-size:23px;font-weight:bold}.s{font-size:19px;fill:#333}.d{font-size:19px;fill:#333}
+.bx{fill:#fff;stroke:#000;stroke-width:2}.g{fill:#e6e6e6;stroke:#000;stroke-width:2}
+.fx{fill:#fff;stroke:#000;stroke-width:2;stroke-dasharray:8 5}
+.w{fill:none;stroke:#000;stroke-width:2}.by{fill:none;stroke:#555;stroke-width:1.6;stroke-dasharray:6 4}
+.grp{fill:none;stroke:#000;stroke-width:1.4}
+</style><rect width="840" height="1162" fill="#fff"/><text class="b" x="0" y="20" text-anchor="start">(a) シンセサイザ（構成 C）</text>
+<rect class="bx" x="10" y="44" width="180" height="80" rx="6"/>
+<text class="n" x="100" y="77" text-anchor="middle">ENV 1〜4</text>
+<text class="n" x="100" y="109" text-anchor="middle">LFO 1〜3</text>
+<path class="w" d="M190 84 H236" marker-end="url(#ar)"/>
+<rect class="g" x="240" y="44" width="330" height="80" rx="6"/>
+<text class="b" x="405" y="77" text-anchor="middle">割り当て R</text>
+<text class="s" x="405" y="108" text-anchor="middle">ソース <tspan font-style="italic">z</tspan><tspan font-size="14" dy="5" font-style="italic">m</tspan><tspan dy="-5"> と深さ </tspan><tspan font-style="italic">d</tspan><tspan font-size="14" dy="5" font-style="italic">m</tspan></text>
+<path class="w" d="M570 84 H616" marker-end="url(#ar)"/>
+<text class="n" x="624" y="79" text-anchor="start">18 の変調先へ</text>
+<text class="s" x="624" y="108" text-anchor="start">（各段の下の項目）</text>
+<rect class="bx" x="10" y="174" width="180" height="70" rx="6"/>
+<text class="n" x="100.0" y="217" text-anchor="middle">オシレータ ×2</text>
+<rect class="bx" x="230" y="174" width="150" height="70" rx="6"/>
+<text class="n" x="305.0" y="204" text-anchor="middle">ドライブ</text>
+<text class="s" x="305.0" y="231" text-anchor="middle">tanh</text>
+<rect class="bx" x="420" y="174" width="150" height="70" rx="6"/>
+<text class="n" x="495.0" y="217" text-anchor="middle">フィルタ</text>
+<rect class="bx" x="610" y="174" width="150" height="70" rx="6"/>
+<text class="n" x="685.0" y="217" text-anchor="middle">VCA</text>
+<path class="w" d="M190 209 H226" marker-end="url(#ar)"/>
+<path class="w" d="M380 209 H416" marker-end="url(#ar)"/>
+<path class="w" d="M570 209 H606" marker-end="url(#ar)"/>
+<text class="d" x="100" y="274" text-anchor="middle">level ×2, Fin ×2</text>
+<text class="d" x="305" y="274" text-anchor="middle">drive</text>
+<text class="d" x="495" y="274" text-anchor="middle">cutoff, res</text>
+<text class="d" x="685" y="274" text-anchor="middle">amp</text>
+<path class="w" d="M760 209 H805 V316 H22 V399 H56" marker-end="url(#ar)"/>
+<path class="by" d="M45 399 V344 H215 V399"/>
+<rect class="fx" x="60" y="364" width="140" height="70" rx="6"/>
+<text class="n" x="130" y="407" text-anchor="middle">コーラス</text>
+<text class="d" x="130" y="464" text-anchor="middle">rate, depth, fb</text>
+<path class="by" d="M225 399 V344 H395 V399"/>
+<rect class="fx" x="240" y="364" width="140" height="70" rx="6"/>
+<text class="n" x="310" y="407" text-anchor="middle">コンプ</text>
+<text class="d" x="310" y="464" text-anchor="middle">thresh, ratio</text>
+<path class="by" d="M405 399 V344 H575 V399"/>
+<rect class="fx" x="420" y="364" width="140" height="70" rx="6"/>
+<text class="n" x="490" y="407" text-anchor="middle">EQ</text>
+<text class="d" x="490" y="464" text-anchor="middle">low, mid, high</text>
+<path class="by" d="M585 399 V344 H755 V399"/>
+<rect class="fx" x="600" y="364" width="140" height="70" rx="6"/>
+<text class="n" x="670" y="407" text-anchor="middle">ディスト</text>
+<text class="d" x="670" y="464" text-anchor="middle">drive, mix</text>
+<path class="w" d="M200 399 H236" marker-end="url(#ar)"/>
+<path class="w" d="M380 399 H416" marker-end="url(#ar)"/>
+<path class="w" d="M560 399 H596" marker-end="url(#ar)"/>
+<path class="w" d="M740 399 H766" marker-end="url(#ar)"/>
+<rect class="bx" x="770" y="364" width="62" height="70" rx="6"/>
+<text class="n" x="801" y="407" text-anchor="middle">音</text>
+<text class="s" x="10" y="512" text-anchor="start">各段の下の項目が変調先（計 18）。破線の段は確率 1/2 で素通し</text><text class="b" x="0" y="574" text-anchor="start">(b) 推定器</text>
+<rect class="bx" x="10" y="594" width="180" height="44" rx="22"/>
+<text class="n" x="100" y="624" text-anchor="middle">音（1.5 s）</text>
+<rect class="bx" x="662" y="594" width="120" height="44" rx="22"/>
+<text class="n" x="722" y="624" text-anchor="middle">f0</text>
+<path class="w" d="M100 638 V664" marker-end="url(#ar)"/>
+<path class="w" d="M722 638 V664" marker-end="url(#ar)"/>
+<rect class="bx" x="10" y="668" width="180" height="80" rx="6"/>
+<text class="n" x="100.0" y="702" text-anchor="middle">対数メル</text>
+<text class="s" x="100.0" y="731" text-anchor="middle">128 帯域</text>
+<rect class="bx" x="225" y="668" width="160" height="80" rx="6"/>
+<text class="n" x="305.0" y="702" text-anchor="middle">2 次元</text>
+<text class="s" x="305.0" y="731" text-anchor="middle">畳み込み ×4</text>
+<rect class="bx" x="420" y="668" width="160" height="80" rx="6"/>
+<text class="n" x="500.0" y="702" text-anchor="middle">双方向</text>
+<text class="s" x="500.0" y="731" text-anchor="middle">GRU</text>
+<rect class="bx" x="615" y="668" width="215" height="80" rx="6"/>
+<text class="n" x="722.5" y="702" text-anchor="middle">共有の特徴</text>
+<text class="s" x="722.5" y="731" text-anchor="middle">256 次元</text>
+<path class="w" d="M190 708 H221" marker-end="url(#ar)"/>
+<path class="w" d="M385 708 H416" marker-end="url(#ar)"/>
+<path class="w" d="M580 708 H611" marker-end="url(#ar)"/>
+<path class="w" d="M722 748 V784" marker-end="url(#ar)"/>
+<rect class="grp" x="2" y="788" width="836" height="250" rx="8"/>
+<text class="b" x="16" y="818" text-anchor="start">出力ヘッド 8 個（それぞれ全結合層 1 枚）</text>
+<rect class="g" x="12" y="836" width="196" height="84" rx="6"/>
+<text class="b" x="110" y="871" text-anchor="middle">割り当て</text>
+<text class="s" x="110" y="902" text-anchor="middle">18 ×（7 ＋ なし）</text>
+<rect class="g" x="218" y="836" width="196" height="84" rx="6"/>
+<text class="b" x="316" y="871" text-anchor="middle">深さ</text>
+<text class="s" x="316" y="902" text-anchor="middle">18（分類）</text>
+<rect class="g" x="424" y="836" width="196" height="84" rx="6"/>
+<text class="b" x="522" y="871" text-anchor="middle">ENV の形</text>
+<text class="s" x="522" y="902" text-anchor="middle">4 × 5</text>
+<rect class="g" x="630" y="836" width="196" height="84" rx="6"/>
+<text class="b" x="728" y="871" text-anchor="middle">LFO のレート</text>
+<text class="s" x="728" y="902" text-anchor="middle">3（分類）</text>
+<rect class="g" x="12" y="934" width="196" height="84" rx="6"/>
+<text class="b" x="110" y="969" text-anchor="middle">LFO の位相・波形</text>
+<text class="s" x="110" y="1000" text-anchor="middle">3 × 2</text>
+<rect class="g" x="218" y="934" width="196" height="84" rx="6"/>
+<text class="b" x="316" y="969" text-anchor="middle">静的な値 <tspan font-style="italic">θ</tspan></text>
+<text class="s" x="316" y="1000" text-anchor="middle">18</text>
+<rect class="g" x="424" y="934" width="196" height="84" rx="6"/>
+<text class="b" x="522" y="969" text-anchor="middle">その他の静的値</text>
+<text class="s" x="522" y="1000" text-anchor="middle">波形 2・makeup 1</text>
+<rect class="g" x="630" y="934" width="196" height="84" rx="6"/>
+<text class="b" x="728" y="969" text-anchor="middle">エフェクトの有無</text>
+<text class="s" x="728" y="1000" text-anchor="middle">4（2 値）</text>
+<path class="w" d="M420 1038 V1068" marker-end="url(#ar)"/>
+<rect class="bx" x="10" y="1072" width="820" height="84" rx="6"/>
+<text class="n" x="420" y="1106" text-anchor="middle">推定結果：割り当て R̂（18 × 7）、ソースの形、静的な値、エフェクトの有無</text>
+<text class="s" x="420" y="1138" text-anchor="middle">ソースの型は枠で固定（ENV 4 枠・LFO 3 枠）。(a) のシンセに入れると音に戻せる</text></svg>
