@@ -39,7 +39,7 @@ function box(sl, x, y, w, h, text, o = {}) {
     shape: "rect", x: mm(x), y: mm(y), w: mm(w), h: mm(h), margin: 0,
     align: "center", valign: "middle", color: "000000", fill: { color: "FFFFFF" },
     line: { color: "000000", width: LW, dashType: o.dash ? "dash" : "solid" },
-    lineSpacingMultiple: 0.95, objectName: o.name,
+    lineSpacingMultiple: 0.95, objectName: o.name, wrap: o.wrap !== false,
   });
 }
 function label(sl, x, y, w, text, o = {}) {
@@ -94,16 +94,18 @@ async function synth() {
   row1.forEach(([x, w, n, d]) => { box(s, x, r1, w, 6, n, { name: n }); label(s, x - 3, r1 + 6.6, w + 6, d); });
   wire(s, [[20, c1], [24, c1]]); wire(s, [[37, c1], [41, c1]]); wire(s, [[54, c1], [58, c1]]);
   const r2 = 44, c2 = r2 + 3;
-  wire(s, [[69, c1], [81, c1], [81, 39.5], [2.5, 39.5], [2.5, c2], [6, c2]]);
-  const row2 = [[6, 13, "コーラス", "rate, depth, fb"], [26, 11, "コンプ", "thresh, ratio"],
-                [44, 9, "EQ", "low, mid, high"], [60, 12, "ディスト", "drive, mix"]];
-  row2.forEach(([x, w, n, d]) => {
-    box(s, x, r2, w, 6, n, { dash: true, name: n });
-    label(s, x - 4, r2 + 6.6, w + 8, d);
-    wire(s, [[x - 2, c2], [x - 2, r2 - 2.5], [x + w + 2, r2 - 2.5], [x + w + 2, c2]], { noArrow: true, w: 0.5 });
+  wire(s, [[69, c1], [81, c1], [81, 39.5], [2.5, 39.5], [2.5, c2], [4.5, c2]]);
+  // [x, 幅, 名前, 変調先]。迂回線は箱の左右 1.5 mm
+  const row2 = [[4.5, 11, "コーラス", "rate, depth, fb"], [20, 15.5, "コンプレッサ", "thresh, ratio"],
+                [40, 7, "EQ", "low/mid/high"], [51.5, 21.5, "ディストーション", "drive, mix"]];
+  row2.forEach(([x, w, n, d], i) => {
+    box(s, x, r2, w, 6, n, { dash: true, name: n, wrap: false });
+    label(s, x - 6, r2 + 6.6, w + 12, d, { wrap: false });
+    wire(s, [[x - 1.5, c2], [x - 1.5, r2 - 2.5], [x + w + 1.5, r2 - 2.5], [x + w + 1.5, c2]], { noArrow: true, w: 0.5 });
+    const nx = i < 3 ? row2[i + 1][0] : 77.5;
+    wire(s, [[x + w, c2], [nx, c2]]);
   });
-  wire(s, [[19, c2], [26, c2]]); wire(s, [[37, c2], [44, c2]]); wire(s, [[53, c2], [60, c2]]); wire(s, [[72, c2], [78, c2]]);
-  box(s, 78, r2, 5, 6, "音", { name: "音" });
+  label(s, 78, r2 + 1.5, 5, "音", { size: PT, align: "left" });
   label(s, 2, 54.3, 80, "破線の段はそれぞれ確率 1/2 で素通し", { align: "left" });
   await p.writeFile({ fileName: "fig_synth.pptx" });
 }
