@@ -46,6 +46,7 @@ function label(sl, x, y, w, text, o = {}) {
   sl.addText(lines([].concat(text), o.size || PT_S), {
     x: mm(x), y: mm(y), w: mm(w), h: mm(o.h || 3), margin: 0, isTextBox: true,
     align: o.align || "center", valign: "middle", color: "000000", objectName: o.name,
+    wrap: o.wrap !== false,
   });
 }
 // 折れ線（最後の区間だけ矢印）。pts = [[x,y],...]
@@ -73,18 +74,18 @@ function group(sl, x, y, w, h, title, sub, name) {
 async function synth() {
   const p = deck(84, 66), s = p.addSlide();
   // 変調ソース（形を小さな折れ線で示す）
-  group(s, 0.5, 0.5, 24, 23, "変調ソース", "1 音に 4 本", "枠: 変調ソース");
-  box(s, 2.5, 2, 20, 6, "", { name: "ENV" }); label(s, 3, 3.5, 8, "ENV", { size: PT, align: "left" });
-  wire(s, [[11, 7.2], [12.5, 3], [14, 4.8], [18, 4.8], [20.5, 7.2]], { noArrow: true, w: 0.5 });
-  box(s, 2.5, 9.5, 20, 6, "", { name: "LFO" }); label(s, 3, 11, 8, "LFO", { size: PT, align: "left" });
-  wire(s, [[11, 12.5], [12.25, 10.3], [14.75, 14.7], [17.25, 10.3], [19.75, 14.7], [21, 12.5]], { noArrow: true, w: 0.5 });
+  group(s, 0.5, 0.5, 27.5, 23, "変調ソース", "うち最大 4 本を使う", "枠: 変調ソース");
+  box(s, 2.5, 2, 23.5, 6, "", { name: "ENV" }); label(s, 3, 3.5, 12, "ENV 1～4", { size: PT, align: "left", wrap: false });
+  wire(s, [[18.5, 7.2], [19.4, 3], [20.4, 4.8], [22.7, 4.8], [24.5, 7.2]], { noArrow: true, w: 0.5 });
+  box(s, 2.5, 9.5, 23.5, 6, "", { name: "LFO" }); label(s, 3, 11, 12, "LFO 1～3", { size: PT, align: "left", wrap: false });
+  wire(s, [[18.5, 12.5], [19.2, 10.3], [20.6, 14.7], [22, 10.3], [23.4, 14.7], [24.1, 12.5]], { noArrow: true, w: 0.5 });
   // 割り当て
-  wire(s, [[24.5, 8], [30, 8]]);
-  box(s, 30, 3, 24, 10, ["割り当て $R$", "$z_m$, $d_m$"], { name: "割り当て" });
-  label(s, 26, 14.2, 32, "$c_m$($n$) = σ($θ_m$ + $d_m$$e$($n$))", { size: PT_S });
-  wire(s, [[54, 8], [59, 8]]);
-  label(s, 59.5, 6.5, 24, "18 の変調先へ", { size: PT, align: "left" });
-  wire(s, [[70.5, 10], [70.5, 25]]);
+  wire(s, [[28, 8], [32, 8]]);
+  box(s, 32, 3, 24, 10, ["割り当て $R$", "$z_m$, $d_m$"], { name: "割り当て" });
+  label(s, 28, 14.2, 32, "$c_m$($n$) = σ($θ_m$ + $d_m$$e$($n$))", { size: PT_S });
+  wire(s, [[56, 8], [60, 8]]);
+  label(s, 60.5, 6.5, 23, "18 の変調先へ", { size: PT, align: "left" });
+  wire(s, [[71.5, 10], [71.5, 25]]);
   // 信号の流れ
   group(s, 0.5, 25.5, 83, 40, "信号の流れ（順番は固定）", null, "枠: 信号の流れ");
   const r1 = 28, c1 = r1 + 3;
